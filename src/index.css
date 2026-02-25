@@ -1,0 +1,66 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", -apple-system, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, monospace;
+
+  --color-bg: #000000;
+  --color-surface: #141413;
+  --color-surface-2: #171717;
+  --color-surface-3: #212121;
+  --color-warm-dark: #30302E;
+  
+  --color-text-main: #FAFAFA;
+  --color-text-muted: #A6A6A6;
+  --color-text-dark: #555555;
+  --color-warm-light: #FAF9F5;
+  
+  --color-accent: #F97316;
+  --color-accent-hover: #FB923C;
+  --color-accent-dark: #EA580C;
+  
+  --color-success: #28C840;
+  --color-info: #22D3EE;
+  --color-error: #FF5F57;
+  
+  --color-border-subtle: rgba(255,255,255,0.10);
+  --color-border-accent: rgba(249,115,22,0.25);
+
+  --shadow-sm: rgba(0,0,0,0.05) 0px 1px 2px 0px;
+  --shadow-md: rgba(0,0,0,.05) 0 1px 0, rgba(0,0,0,.10) 0 4px 4px, rgba(0,0,0,.15) 0 10px 10px, rgba(0,0,0,.10) 0 -1px 0 inset;
+  --shadow-lg: rgba(0,0,0,0.15) 0px 40px 80px 0px;
+  --shadow-glow: rgba(249,115,22,0.20) 0px 0px 20px 0px;
+}
+
+@layer base {
+  body {
+    background-color: var(--color-bg);
+    color: var(--color-text-main);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  body::before {
+    content: '';
+    position: fixed; inset: 0; pointer-events: none; z-index: 9999;
+    background: repeating-linear-gradient(
+      0deg,
+      rgba(0,0,0,0.03) 0px, rgba(0,0,0,0.03) 1px,
+      transparent 1px, transparent 2px
+    );
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-accent text-black border-none px-6 py-2.5 text-xs font-bold tracking-[0.1em] uppercase transition-colors hover:bg-accent-hover inline-flex items-center gap-2 font-sans;
+  }
+  .btn-secondary {
+    @apply bg-transparent text-text-main border border-border-subtle px-6 py-2.5 text-xs font-semibold tracking-[0.08em] uppercase transition-colors hover:border-white/30 inline-flex items-center gap-2 font-sans;
+  }
+  .badge {
+    @apply inline-flex items-center gap-1.5 border border-border-subtle px-2.5 py-1 text-[10px] font-mono tracking-[0.08em] uppercase;
+  }
+}
