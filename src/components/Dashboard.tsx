@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { CheckCircle2, Circle, Flame, Target, Wallet, Briefcase, Activity, Crosshair } from 'lucide-react';
+import { supabase } from '../lib/supabase';
 
-const initialData = [
+const progressData = [
   { day: '1', progress: 100 },
   { day: '2', progress: 100 },
   { day: '3', progress: 95 },
@@ -18,45 +20,124 @@ const initialData = [
   { day: '14', progress: 15 },
 ];
 
-const habitsList = [
-  'Estudar',
-  'Beber 4L de água',
-  'Cardio matinal',
-  'Leitura',
-  'Treinar',
-  'Meditar'
-];
+interface Habit {
+  id: string;
+  title: string;
+  xp_reward: number;
+}
 
-const generateHabits = () => {
-  const grid: Record<string, boolean[]> = {};
-  habitsList.forEach(habit => {
-    grid[habit] = Array.from({ length: 14 }, () => Math.random() > 0.5);
-  });
-  return grid;
-};
+interface HabitLog {
+  id: string;
+  habit_id: string;
+}
 
 export default function Dashboard() {
-  const [habitGrid, setHabitGrid] = useState(generateHabits());
+  const [habits, setHabits] = useState<Habit[]>([]);
+  const [habitLogs, setHabitLogs] = useState<HabitLog[]>([]);
+  const [balance, setBalance] = useState(0);
+  const [pendingTasks, setPendingTasks] = useState(0);
 
-  const toggleHabit = (habit: string, dayIndex: number) => {
-    setHabitGrid(prev => {
-      const newGrid = { ...prev };
-      newGrid[habit][dayIndex] = !newGrid[habit][dayIndex];
-      return newGrid;
-    });
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  useEffect(() => {
+    fetchDashboardData();
+  }, []);
+
+  const fetchDashboardData = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      // Fetch Balance
+      const { data: transactions } = await supabase
+        .from('financial_transactions')
+        .select('amount')
+        .eq('user_id', user.id);
+
+      if (transactions) {
+        const currentBalance = transactions.reduce((acc, curr) => acc + Number(curr.amount), 0);
+        setBalance(currentBalance);
+      }
+
+      // Fetch Pending Tasks
+      const { data: tasks } = await supabase
+        .from('work_tasks')
+        .select('id')
+        .eq('user_id', user.id)
+        .neq('status', 'done');
+
+      if (tasks) {
+        setPendingTasks(tasks.length);
+      }
+
+      // Fetch Habits
+      const [habitsRes, logsRes] = await Promise.all([
+        supabase.from('habits').select('*').eq('user_id', user.id).order('created_at', { ascending: true }),
+        supabase.from('habit_logs').select('*').eq('user_id', user.id).eq('completed_date', todayStr)
+      ]);
+
+      if (habitsRes.data) setHabits(habitsRes.data);
+      if (logsRes.data) setHabitLogs(logsRes.data);
+
+    } catch (error) {
+      console.error('Error fetching dashboard data:', error);
+    }
   };
+
+  const toggleHabit = async (habitId: string) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const existingLog = habitLogs.find(l => l.habit_id === habitId);
+
+      if (!user) {
+        // Test mode fallback
+        if (existingLog) {
+          setHabitLogs(habitLogs.filter(l => l.id !== existingLog.id));
+        } else {
+          const fakeId = Math.random().toString(36).substring(7);
+          setHabitLogs([...habitLogs, { id: fakeId, habit_id: habitId }]);
+        }
+        return;
+      }
+
+      if (existingLog) {
+        // Uncheck
+        const { error } = await supabase.from('habit_logs').delete().eq('id', existingLog.id);
+        if (error) throw error;
+        setHabitLogs(habitLogs.filter(l => l.id !== existingLog.id));
+      } else {
+        // Check
+        const { data, error } = await supabase
+          .from('habit_logs')
+          .insert([{ user_id: user.id, habit_id: habitId, completed_date: todayStr }])
+          .select()
+          .single();
+        if (error) throw error;
+        setHabitLogs([...habitLogs, data]);
+      }
+    } catch (error: any) {
+      console.error('Error toggling habit:', error);
+      alert(`Erro ao registrar hábito: ${error.message || JSON.stringify(error)}`);
+    }
+  };
+
+  const xpToday = habitLogs.reduce((acc, log) => {
+    const habit = habits.find(h => h.id === log.habit_id);
+    return acc + (habit?.xp_reward || 0);
+  }, 0);
+  const xpGoal = 100;
 
   return (
     <div className="space-y-12 pb-12">
-      {/* Hero Section */}
-      <section className="relative border-b border-border-subtle pb-12 mb-12">
+      {/* Secao 01 - Hero / Status Geral */}
+      <section id="secao-01" className="relative border-b border-border-subtle pb-12 mb-12">
         <div className="absolute inset-0 z-0 opacity-5 pointer-events-none" style={{
           backgroundImage: 'linear-gradient(rgba(255,255,255,1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,1) 1px, transparent 1px)',
           backgroundSize: '40px 40px'
         }}></div>
         <div className="relative z-10">
           <div className="flex items-center gap-2 text-[11px] font-semibold tracking-[0.12em] text-text-muted uppercase mb-4">
-            <div className="w-1.5 h-1.5 rounded-full bg-success"></div>
+            <div className="w-1.5 h-1.5 rounded-full bg-success animate-pulse"></div>
             SYSTEM ONLINE // HABIT TRACKER
           </div>
           <h1 className="text-[64px] font-black leading-[0.9] tracking-[-2px] uppercase mb-2">
@@ -65,29 +146,21 @@ export default function Dashboard() {
           <p className="text-[13px] text-text-muted max-w-lg leading-[1.7] mb-7 font-mono border-l-2 border-accent pl-3">
             Monitoramento de consistência e execução de rotinas. Mantenha os níveis de XP altos para garantir o progresso.
           </p>
-          <div className="flex gap-3 items-center flex-wrap">
-            <button className="btn-primary">
-              INICIAR ROTINA →
-            </button>
-            <button className="btn-secondary">
-              VER RELATÓRIO ⊡
-            </button>
-          </div>
         </div>
       </section>
 
-      {/* Chart Section */}
-      <section>
+      {/* Secao 02 - Progresso Geral */}
+      <section id="secao-02">
         <div className="flex items-baseline gap-4 mb-9">
           <span className="text-[11px] font-bold text-accent tracking-[0.1em] font-mono border border-border-accent px-2 py-0.5">01</span>
           <h2 className="text-xl font-extrabold tracking-[-0.3px] uppercase">Progresso Geral</h2>
           <span className="text-xs text-text-muted ml-auto font-mono">// 14 dias</span>
         </div>
         
-        <div className="bg-surface-2 border border-border-subtle p-6 rounded-md shadow-md">
+        <div className="bg-surface-2 border border-border-subtle p-6">
           <div className="h-64 w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={initialData} margin={{ top: 10, right: 0, left: -20, bottom: 0 }}>
+              <AreaChart data={progressData} margin={{ top: 10, right: 0, left: -20, bottom: 0 }}>
                 <defs>
                   <linearGradient id="colorProgress" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#F97316" stopOpacity={0.3}/>
@@ -108,62 +181,142 @@ export default function Dashboard() {
         </div>
       </section>
 
-      {/* Habits Grid Section */}
-      <section>
+      {/* Secao 03 - Resumo do Dia */}
+      <section id="secao-03">
         <div className="flex items-baseline gap-4 mb-9">
           <span className="text-[11px] font-bold text-accent tracking-[0.1em] font-mono border border-border-accent px-2 py-0.5">02</span>
-          <h2 className="text-xl font-extrabold tracking-[-0.3px] uppercase">Grade de Hábitos</h2>
-          <span className="text-xs text-text-muted ml-auto font-mono">// matriz de execução</span>
+          <h2 className="text-xl font-extrabold tracking-[-0.3px] uppercase">Resumo do Dia</h2>
         </div>
-        
-        <div className="bg-surface-2 border border-border-subtle p-6 rounded-md shadow-md overflow-x-auto">
-          <div className="min-w-[800px]">
-            {/* Header */}
-            <div className="flex mb-4 border-b border-border-subtle pb-2">
-              <div className="w-48 shrink-0 text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] flex items-end pb-1">Hábito</div>
-              <div className="flex-1 flex justify-between px-2">
-                {Array.from({ length: 14 }).map((_, i) => (
-                  <div key={i} className="flex flex-col items-center w-8">
-                    <span className="text-[10px] font-mono text-text-muted">{i + 1}</span>
-                    <span className="text-[9px] text-text-dark uppercase font-mono tracking-[0.05em]">
-                      {['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'][i % 7]}
-                    </span>
-                  </div>
-                ))}
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Hábitos de Hoje */}
+          <div className="lg:col-span-2 bg-surface-2 border border-border-subtle p-6">
+            <div className="text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] mb-6 flex justify-between">
+              <span>Hábitos Pendentes</span>
+              <span>{habitLogs.length} / {habits.length} CONCLUÍDOS</span>
+            </div>
+            <div className="space-y-3">
+              {habits.length === 0 ? (
+                <div className="p-8 text-center text-xs font-mono text-text-muted uppercase border border-border-subtle bg-surface">
+                  Nenhum hábito cadastrado.
+                </div>
+              ) : (
+                habits.map(habit => {
+                  const isDone = habitLogs.some(l => l.habit_id === habit.id);
+                  return (
+                    <button
+                      key={habit.id}
+                      onClick={() => toggleHabit(habit.id)}
+                      className={`w-full flex items-center justify-between p-4 border transition-colors ${
+                        isDone 
+                          ? 'border-success/30 bg-success/5' 
+                          : 'border-border-subtle bg-surface hover:border-accent/50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-4">
+                        {isDone ? (
+                          <CheckCircle2 className="w-5 h-5 text-success" />
+                        ) : (
+                          <Circle className="w-5 h-5 text-text-muted" />
+                        )}
+                        <span className={`font-mono text-sm uppercase tracking-[0.05em] ${isDone ? 'text-text-muted line-through' : 'text-text-main'}`}>
+                          {habit.title}
+                        </span>
+                      </div>
+                      <span className={`text-[10px] font-mono font-bold ${isDone ? 'text-success' : 'text-accent'}`}>
+                        +{habit.xp_reward} XP
+                      </span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          {/* Status do Dia */}
+          <div className="space-y-6">
+            {/* XP do Dia */}
+            <div className="bg-surface-2 border border-border-subtle p-6">
+              <div className="text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] mb-4 flex items-center gap-2">
+                <Target className="w-3 h-3 text-accent" />
+                XP HOJE VS META
+              </div>
+              <div className="flex items-end gap-2 mb-3">
+                <span className="text-4xl font-black tracking-[-1px] text-success">+{xpToday}</span>
+                <span className="text-sm font-mono text-text-muted mb-1">/ {xpGoal} XP</span>
+              </div>
+              <div className="h-1.5 w-full bg-surface border border-border-subtle overflow-hidden relative">
+                <div className="absolute top-0 left-0 h-full bg-success shadow-glow transition-all duration-500" style={{ width: `${Math.min(100, (xpToday / xpGoal) * 100)}%` }}></div>
               </div>
             </div>
 
-            {/* Rows */}
-            <div className="space-y-1">
-              {habitsList.map(habit => (
-                <div key={habit} className="flex items-center group hover:bg-surface-3 transition-colors rounded px-1 -mx-1">
-                  <div className="w-48 shrink-0 flex items-center py-2">
-                    <span className="text-xs font-semibold text-text-main uppercase tracking-[0.04em]">{habit}</span>
-                  </div>
-                  <div className="flex-1 flex justify-between px-2">
-                    {habitGrid[habit].map((isDone, dayIndex) => (
-                      <button
-                        key={dayIndex}
-                        onClick={() => toggleHabit(habit, dayIndex)}
-                        className="w-8 h-8 flex items-center justify-center group/btn"
-                      >
-                        <div className={`w-4 h-4 border transition-all ${
-                          isDone 
-                            ? 'bg-accent border-accent shadow-glow' 
-                            : 'border-border-subtle bg-surface group-hover/btn:border-accent/50'
-                        }`}>
-                          {isDone && (
-                            <svg viewBox="0 0 14 14" fill="none" className="w-full h-full text-black p-0.5">
-                              <path d="M3 7L6 10L11 4" stroke="currentColor" strokeWidth="2" strokeLinecap="square" strokeLinejoin="miter"/>
-                            </svg>
-                          )}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
+            {/* Streak */}
+            <div className="bg-surface-2 border border-border-subtle p-6">
+              <div className="text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] mb-4 flex items-center gap-2">
+                <Flame className="w-3 h-3 text-error" />
+                STREAK ATUAL
+              </div>
+              <div className="text-4xl font-black tracking-[-1px] text-error">12 DIAS</div>
+              <div className="text-[10px] font-mono text-text-muted mt-2 uppercase">Mantenha o fogo aceso</div>
             </div>
+
+            {/* Próxima Missão */}
+            <div className="bg-surface-2 border border-border-subtle p-6">
+              <div className="text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] mb-4 flex items-center gap-2">
+                <Crosshair className="w-3 h-3 text-info" />
+                PRÓXIMA MISSÃO
+              </div>
+              <div className="text-sm font-bold uppercase tracking-[0.05em] mb-2">Acordar às 06:00</div>
+              <div className="text-[10px] font-mono text-text-muted uppercase">15/21 DIAS CONCLUÍDOS</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Secao 04 - Metricas Rapidas */}
+      <section id="secao-04">
+        <div className="flex items-baseline gap-4 mb-9">
+          <span className="text-[11px] font-bold text-accent tracking-[0.1em] font-mono border border-border-accent px-2 py-0.5">03</span>
+          <h2 className="text-xl font-extrabold tracking-[-0.3px] uppercase">Métricas Rápidas</h2>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="bg-surface border border-border-subtle p-6 hover:border-info/50 transition-colors cursor-pointer group">
+            <div className="text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] mb-4 flex justify-between items-center">
+              SALDO ATUAL
+              <Wallet className="w-4 h-4 text-info group-hover:scale-110 transition-transform" />
+            </div>
+            <div className={`text-2xl font-black tracking-[-1px] ${balance >= 0 ? 'text-info' : 'text-error'}`}>
+              R$ {balance.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+            </div>
+          </div>
+
+          <div className="bg-surface border border-border-subtle p-6 hover:border-error/50 transition-colors cursor-pointer group">
+            <div className="text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] mb-4 flex justify-between items-center">
+              TAREFAS PENDENTES
+              <Briefcase className="w-4 h-4 text-error group-hover:scale-110 transition-transform" />
+            </div>
+            <div className="text-2xl font-black tracking-[-1px] text-error">
+              {pendingTasks.toString().padStart(2, '0')}
+            </div>
+          </div>
+
+          <div className="bg-surface border border-border-subtle p-6 hover:border-success/50 transition-colors cursor-pointer group">
+            <div className="text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] mb-4 flex justify-between items-center">
+              ADERÊNCIA ROTINA
+              <Activity className="w-4 h-4 text-success group-hover:scale-110 transition-transform" />
+            </div>
+            <div className="text-2xl font-black tracking-[-1px] text-success">
+              {habits.length > 0 ? ((habitLogs.length / habits.length) * 100).toFixed(0) : 0}%
+            </div>
+          </div>
+
+          <div className="bg-surface border border-border-subtle p-6 hover:border-accent/50 transition-colors cursor-pointer group">
+            <div className="text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] mb-4 flex justify-between items-center">
+              MISSÕES ATIVAS
+              <Target className="w-4 h-4 text-accent group-hover:scale-110 transition-transform" />
+            </div>
+            <div className="text-2xl font-black tracking-[-1px] text-accent">04</div>
           </div>
         </div>
       </section>

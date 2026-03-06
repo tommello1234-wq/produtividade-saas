@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 interface AuthProps {
   onLogin: () => void;
@@ -12,8 +12,7 @@ export default function Auth({ onLogin }: AuthProps) {
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const isSupabaseConfigured = import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY;
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -25,6 +24,7 @@ export default function Auth({ onLogin }: AuthProps) {
 
     setLoading(true);
     setError(null);
+    setSuccessMsg(null);
 
     try {
       if (isLogin) {
@@ -45,9 +45,8 @@ export default function Auth({ onLogin }: AuthProps) {
           }
         });
         if (error) throw error;
-        // Se o Supabase estiver configurado para exigir confirmação de e-mail,
-        // o usuário não será logado imediatamente.
-        alert('Cadastro realizado! Verifique seu e-mail ou faça login se a confirmação estiver desativada.');
+        
+        setSuccessMsg('Cadastro realizado! Verifique seu e-mail ou faça login se a confirmação estiver desativada.');
         setIsLogin(true);
       }
     } catch (err: any) {
@@ -93,6 +92,12 @@ export default function Auth({ onLogin }: AuthProps) {
           </div>
         )}
 
+        {successMsg && (
+          <div className="mb-6 p-3 bg-success/10 border border-success/30 text-success text-xs font-mono">
+            [✓] {successMsg}
+          </div>
+        )}
+
         <form onSubmit={handleSubmit} className="space-y-4">
           {!isLogin && (
             <div>
@@ -130,9 +135,17 @@ export default function Auth({ onLogin }: AuthProps) {
             />
           </div>
 
-          <div className="pt-4">
+          <div className="pt-4 space-y-3">
             <button type="submit" disabled={loading || !isSupabaseConfigured} className="btn-primary w-full justify-center disabled:opacity-50 disabled:cursor-not-allowed">
               {loading ? 'PROCESSANDO...' : (isLogin ? 'INICIAR SESSÃO →' : 'REGISTRAR ACESSO →')}
+            </button>
+            
+            <button 
+              type="button" 
+              onClick={() => onLogin()} 
+              className="btn-secondary w-full justify-center border-accent/50 text-accent hover:bg-accent/10"
+            >
+              [ MODO TESTE: ENTRAR SEM LOGIN ]
             </button>
           </div>
         </form>
@@ -140,7 +153,11 @@ export default function Auth({ onLogin }: AuthProps) {
         <div className="mt-6 pt-6 border-t border-border-subtle text-center">
           <button 
             type="button"
-            onClick={() => setIsLogin(!isLogin)} 
+            onClick={() => {
+              setIsLogin(!isLogin);
+              setError(null);
+              setSuccessMsg(null);
+            }} 
             className="text-[11px] font-mono text-text-muted hover:text-accent transition-colors uppercase tracking-[0.05em]"
           >
             {isLogin ? '[ CRIAR NOVA CONTA ]' : '[ JÁ POSSUO ACESSO ]'}

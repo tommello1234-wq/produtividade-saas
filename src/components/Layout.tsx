@@ -1,5 +1,6 @@
-import React from 'react';
-import { LayoutDashboard, CheckSquare, Wallet, Settings, Target, LogOut } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { LogOut } from 'lucide-react';
+import { supabase } from '../lib/supabase';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -9,104 +10,146 @@ interface LayoutProps {
 }
 
 export default function Layout({ children, activeTab, setActiveTab, onLogout }: LayoutProps) {
-  const navItems = [
-    { id: 'dashboard', label: 'Hábitos', icon: LayoutDashboard },
-    { id: 'tasks', label: 'Missões', icon: CheckSquare },
-    { id: 'finances', label: 'Tesouro', icon: Wallet },
-    { id: 'levels', label: 'Níveis', icon: Target },
+  const [totalXp, setTotalXp] = useState(0);
+  const [balance, setBalance] = useState(0);
+  const [levelId, setLevelId] = useState(1);
+
+  const tabs = [
+    { id: 'dashboard', label: 'OVERVIEW' },
+    { id: 'habitos', label: 'HÁBITOS' },
+    { id: 'missoes', label: 'MISSÕES' },
+    { id: 'tesouro', label: 'TESOURO' },
+    { id: 'niveis', label: 'NÍVEIS' },
+    { id: 'trabalho', label: 'TRABALHO' },
+    { id: 'rotina', label: 'ROTINA' },
+    { id: 'perfil', label: 'PERFIL' },
   ];
 
+  useEffect(() => {
+    fetchGlobalMetrics();
+
+    // Set up a simple interval to refresh metrics every 10 seconds
+    // (A more robust solution would use Supabase Realtime subscriptions)
+    const interval = setInterval(fetchGlobalMetrics, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const fetchGlobalMetrics = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      // Fetch Profile (XP and Level)
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('total_xp, level_id')
+        .eq('id', user.id)
+        .single();
+
+      if (profile) {
+        setTotalXp(profile.total_xp || 0);
+        setLevelId(profile.level_id || 1);
+      }
+
+      // Fetch Transactions (Balance)
+      const { data: transactions } = await supabase
+        .from('financial_transactions')
+        .select('amount')
+        .eq('user_id', user.id);
+
+      if (transactions) {
+        const currentBalance = transactions.reduce((acc, curr) => acc + Number(curr.amount), 0);
+        setBalance(currentBalance);
+      }
+    } catch (error) {
+      console.error('Error fetching global metrics:', error);
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-bg text-text-main flex font-sans">
-      {/* Sidebar */}
-      <aside className="w-11 border-r border-border-subtle bg-surface flex flex-col items-center py-4 shrink-0 z-50 relative">
-        <nav className="flex-1 flex flex-col gap-0.5 w-full items-center">
-          {navItems.map((item, index) => {
-            const isActive = activeTab === item.id;
-            return (
-               <button
-                key={item.id}
-                onClick={() => setActiveTab(item.id)}
-                title={item.label}
-                className={`w-7 h-7 flex items-center justify-center border text-[10px] font-bold transition-all tracking-[0.05em] ${
-                  isActive 
-                    ? 'border-accent text-accent bg-accent/10' 
-                    : 'border-border-subtle text-text-muted hover:border-accent hover:text-accent hover:bg-accent/10'
+    <div className="min-h-screen bg-bg text-text-main font-sans selection:bg-accent/30 flex flex-col">
+      {/* Header Fixo no Topo */}
+      <header className="h-16 border-b border-border-subtle bg-bg/95 backdrop-blur flex items-center justify-between px-6 fixed top-0 w-full z-50">
+        <div className="flex items-center gap-8 h-full">
+          <div className="font-black text-2xl tracking-tighter">EPIC <span className="text-accent">LIFE</span></div>
+          
+          <nav className="hidden xl:flex h-full">
+            {tabs.map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`px-4 h-full flex items-center text-[11px] font-mono tracking-[0.1em] uppercase transition-colors border-b-2 ${
+                  activeTab === tab.id ? 'text-accent border-accent bg-accent/5' : 'text-text-muted border-transparent hover:text-text-main hover:bg-surface'
                 }`}
               >
-                0{index + 1}
+                {tab.label}
               </button>
-            );
-          })}
-        </nav>
+            ))}
+          </nav>
+        </div>
 
-        <div className="w-px flex-1 bg-border-subtle my-2 max-h-12"></div>
-
-        <button 
-          onClick={onLogout}
-          title="Sair do Sistema"
-          className="w-7 h-7 flex items-center justify-center border border-border-subtle text-text-muted hover:border-error hover:text-error hover:bg-error/10 transition-all"
-        >
-          <LogOut className="w-3.5 h-3.5" />
-        </button>
-      </aside>
-
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
-        {/* Topbar */}
-        <header className="h-14 border-b border-border-subtle bg-black/85 backdrop-blur-md flex items-center justify-between shrink-0 z-40 relative">
-          <div className="flex items-center h-full">
-            <div className="text-base font-black tracking-[-0.5px] text-text-main border-r border-border-subtle px-5 h-full flex items-center gap-2 uppercase">
-              Epic<span className="text-accent">Life</span>
+        <div className="flex items-center gap-6">
+          {/* Métricas Globais */}
+          <div className="hidden md:flex items-center gap-6 font-mono text-xs">
+            <div className="flex flex-col items-end">
+              <span className="text-[9px] text-text-muted tracking-[0.1em]">XP TOTAL</span>
+              <span className="text-success font-bold">{totalXp.toLocaleString('pt-BR')} XP</span>
             </div>
-            <nav className="hidden md:flex items-center h-full">
-              {navItems.map(item => (
-                <button
-                  key={item.id}
-                  onClick={() => setActiveTab(item.id)}
-                  className={`px-5 h-full flex items-center text-xs font-medium tracking-[0.06em] uppercase border-r border-border-subtle transition-colors ${
-                    activeTab === item.id ? 'text-text-main bg-surface-2' : 'text-text-muted hover:text-text-main hover:bg-surface'
-                  }`}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </nav>
+            <div className="flex flex-col items-end">
+              <span className="text-[9px] text-text-muted tracking-[0.1em]">SALDO</span>
+              <span className={balance >= 0 ? 'text-info font-bold' : 'text-error font-bold'}>
+                R$ {balance.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+              </span>
+            </div>
+            <div className="flex flex-col items-end border-l border-border-subtle pl-6">
+              <span className="text-[9px] text-text-muted tracking-[0.1em]">LVL {levelId.toString().padStart(2, '0')}</span>
+              <span className="text-accent font-bold">NÍVEL ATUAL</span>
+            </div>
           </div>
           
-          <div className="flex items-center h-full">
-            {/* Stats */}
-            <div className="hidden lg:flex items-center h-full border-l border-border-subtle">
-              <div className="px-5 h-full flex flex-col justify-center border-r border-border-subtle">
-                <span className="text-[9px] font-mono text-text-muted uppercase tracking-[0.1em] mb-0.5">XP Hoje</span>
-                <span className="text-xs font-mono font-bold text-success">+450 XP</span>
-              </div>
-              <div className="px-5 h-full flex flex-col justify-center border-r border-border-subtle">
-                <span className="text-[9px] font-mono text-text-muted uppercase tracking-[0.1em] mb-0.5">Saldo</span>
-                <span className="text-xs font-mono font-bold text-text-main">R$ 2.450,00</span>
-              </div>
-            </div>
+          <button onClick={onLogout} className="text-text-muted hover:text-error transition-colors ml-4" title="Sair do Sistema">
+            <LogOut className="w-4 h-4" />
+          </button>
+        </div>
+      </header>
 
-            {/* Level & Progress */}
-            <div className="flex items-center h-full px-5 gap-4 bg-surface-2 border-l border-border-subtle">
-              <div className="flex flex-col items-end">
-                <span className="text-[11px] font-mono font-bold text-accent tracking-[0.1em]">LVL 04</span>
-                <span className="text-[9px] font-mono text-text-muted uppercase tracking-[0.05em]">Guerreiro</span>
-              </div>
-              <div className="w-24 h-1.5 bg-black border border-border-subtle relative overflow-hidden">
-                <div className="absolute top-0 left-0 h-full bg-accent w-[65%] shadow-glow"></div>
-              </div>
+      <div className="flex flex-1 pt-16">
+        {/* Sidebar Esquerda (Indicadores de Seção) */}
+        <aside className="w-16 fixed left-0 top-16 bottom-0 border-r border-border-subtle bg-bg/50 flex-col items-center py-8 gap-4 z-40 hidden md:flex">
+          {['01', '02', '03', '04'].map((num, i) => (
+            <div 
+              key={num} 
+              className={`w-8 h-8 flex items-center justify-center font-mono text-[10px] font-bold cursor-pointer transition-all ${
+                i === 0 ? 'bg-accent text-black shadow-glow scale-110' : 'text-text-muted hover:text-text-main border border-border-subtle hover:border-accent/50'
+              }`}
+            >
+              {num}
             </div>
-          </div>
-        </header>
+          ))}
+        </aside>
 
-        {/* Scrollable Content */}
-        <div className="flex-1 overflow-auto p-10">
-          <div className="max-w-[960px] mx-auto">
+        {/* Navegação Mobile (Aparece apenas em telas pequenas) */}
+        <div className="xl:hidden fixed bottom-0 left-0 right-0 border-t border-border-subtle bg-bg z-50 overflow-x-auto flex">
+          {tabs.map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`px-4 py-4 shrink-0 text-[10px] font-mono tracking-[0.1em] uppercase transition-colors border-t-2 ${
+                activeTab === tab.id ? 'text-accent border-accent bg-accent/5' : 'text-text-muted border-transparent'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Conteúdo Principal */}
+        <main className="flex-1 md:ml-16 pb-20 xl:pb-0 min-h-screen">
+          <div className="max-w-7xl mx-auto p-4 md:p-8">
             {children}
           </div>
-        </div>
-      </main>
+        </main>
+      </div>
     </div>
   );
 }

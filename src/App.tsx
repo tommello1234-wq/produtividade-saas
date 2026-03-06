@@ -6,14 +6,19 @@
 import React, { useState, useEffect } from 'react';
 import Layout from './components/Layout';
 import Dashboard from './components/Dashboard';
+import Habitos from './components/Habitos';
 import Tasks from './components/Tasks';
 import Finances from './components/Finances';
 import Levels from './components/Levels';
+import Trabalho from './components/Trabalho';
+import Rotina from './components/Rotina';
+import Perfil from './components/Perfil';
 import Auth from './components/Auth';
 import { supabase } from './lib/supabase';
 
 export default function App() {
   const [session, setSession] = useState<any>(null);
+  const [isTestMode, setIsTestMode] = useState(false);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
 
@@ -42,11 +47,12 @@ export default function App() {
     );
   }
 
-  if (!session) {
-    return <Auth onLogin={() => {}} />;
+  if (!session && !isTestMode) {
+    return <Auth onLogin={() => setIsTestMode(true)} />;
   }
 
   const handleLogout = async () => {
+    setIsTestMode(false);
     await supabase.auth.signOut();
   };
 
@@ -57,9 +63,13 @@ export default function App() {
       onLogout={handleLogout}
     >
       {activeTab === 'dashboard' && <Dashboard />}
-      {activeTab === 'tasks' && <Tasks />}
-      {activeTab === 'finances' && <Finances />}
-      {activeTab === 'levels' && <Levels />}
+      {activeTab === 'habitos' && <Habitos />}
+      {activeTab === 'missoes' && <Tasks />}
+      {activeTab === 'tesouro' && <Finances />}
+      {activeTab === 'niveis' && <Levels />}
+      {activeTab === 'trabalho' && <Trabalho />}
+      {activeTab === 'rotina' && <Rotina />}
+      {activeTab === 'perfil' && <Perfil />}
     </Layout>
   );
 }
