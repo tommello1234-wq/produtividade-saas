@@ -21,7 +21,7 @@ const initialBlocks: RoutineBlock[] = [
 
 const DAYS_OF_WEEK = ['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SÁB'];
 
-export default function Rotina() {
+export default function Rotina({ hideHeader = false }: { hideHeader?: boolean }) {
   const [blocks, setBlocks] = useState<RoutineBlock[]>(initialBlocks);
   const [currentTime, setCurrentTime] = useState(new Date());
 
@@ -84,24 +84,26 @@ export default function Rotina() {
 
   return (
     <div className="space-y-12 pb-12">
-      <section className="relative border-b border-border-subtle pb-12 mb-12">
-        <div className="absolute inset-0 z-0 opacity-5 pointer-events-none" style={{
-          backgroundImage: 'linear-gradient(rgba(255,255,255,1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,1) 1px, transparent 1px)',
-          backgroundSize: '40px 40px'
-        }}></div>
-        <div className="relative z-10">
-          <div className="flex items-center gap-2 text-[11px] font-semibold tracking-[0.12em] text-text-muted uppercase mb-4">
-            <div className="w-1.5 h-1.5 rounded-full bg-info animate-pulse"></div>
-            TIME MANAGEMENT // TIMELINE
+      {!hideHeader && (
+        <section className="relative border-b border-border-subtle pb-12 mb-12">
+          <div className="absolute inset-0 z-0 opacity-5 pointer-events-none" style={{
+            backgroundImage: 'linear-gradient(rgba(255,255,255,1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,1) 1px, transparent 1px)',
+            backgroundSize: '40px 40px'
+          }}></div>
+          <div className="relative z-10">
+            <div className="flex items-center gap-2 text-[11px] font-semibold tracking-[0.12em] text-text-muted uppercase mb-4">
+              <div className="w-1.5 h-1.5 rounded-full bg-info animate-pulse"></div>
+              TIME MANAGEMENT // TIMELINE
+            </div>
+            <h1 className="text-[64px] font-black leading-[0.9] tracking-[-2px] uppercase mb-2">
+              DAILY<br/><span className="text-surface-3">ROUTINE</span>
+            </h1>
+            <p className="text-[13px] text-text-muted max-w-lg leading-[1.7] mb-7 font-mono border-l-2 border-info pl-3">
+              Estruture seu dia em blocos de tempo. Cumpra a rotina planejada para maximizar sua eficiência e ganhar XP bônus.
+            </p>
           </div>
-          <h1 className="text-[64px] font-black leading-[0.9] tracking-[-2px] uppercase mb-2">
-            DAILY<br/><span className="text-surface-3">ROUTINE</span>
-          </h1>
-          <p className="text-[13px] text-text-muted max-w-lg leading-[1.7] mb-7 font-mono border-l-2 border-info pl-3">
-            Estruture seu dia em blocos de tempo. Cumpra a rotina planejada para maximizar sua eficiência e ganhar XP bônus.
-          </p>
-        </div>
-      </section>
+        </section>
+      )}
 
       {/* Secao 01 - Rotina de Hoje (Timeline) */}
       <section id="secao-01">

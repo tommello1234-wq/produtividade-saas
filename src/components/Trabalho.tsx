@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Clock, AlertCircle, CheckCircle2, Plus, GripVertical, Trash2 } from 'lucide-react';
+import { Clock, AlertCircle, CheckCircle2, Plus, GripVertical, Trash2, X, Save } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 type Priority = 'low' | 'medium' | 'high';
@@ -26,9 +26,58 @@ export default function Trabalho() {
   const [priority, setPriority] = useState<Priority>('medium');
   const [deadline, setDeadline] = useState('');
 
+  // Edit Modal state
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editTitle, setEditTitle] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editPriority, setEditPriority] = useState<Priority>('medium');
+  const [editDeadline, setEditDeadline] = useState('');
+  const [editXpReward, setEditXpReward] = useState(0);
+
   useEffect(() => {
     fetchTasks();
   }, []);
+
+  const openEditModal = (task: Task) => {
+    setSelectedTask(task);
+    setEditTitle(task.title);
+    setEditDescription(task.description || '');
+    setEditPriority(task.priority);
+    setEditDeadline(task.deadline || '');
+    setEditXpReward(task.xp_reward);
+    setIsEditModalOpen(true);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!selectedTask || !editTitle.trim()) return;
+
+    const updatedTask = {
+      title: editTitle,
+      description: editDescription,
+      priority: editPriority,
+      deadline: editDeadline || null,
+      xp_reward: editXpReward
+    };
+
+    try {
+      // Optimistic update
+      setTasks(tasks.map(t => t.id === selectedTask.id ? { ...t, ...updatedTask } : t));
+      setIsEditModalOpen(false);
+
+      const { error } = await supabase
+        .from('work_tasks')
+        .update(updatedTask)
+        .eq('id', selectedTask.id);
+
+      if (error) {
+        fetchTasks();
+        throw error;
+      }
+    } catch (error) {
+      console.error('Error updating task:', error);
+    }
+  };
 
   const fetchTasks = async () => {
     try {
@@ -156,6 +205,7 @@ export default function Trabalho() {
   };
 
   const handleDeleteTask = async (id: string) => {
+    if (!window.confirm('Tem certeza que deseja excluir esta tarefa?')) return;
     try {
       const { error } = await supabase
         .from('work_tasks')
@@ -205,6 +255,7 @@ export default function Trabalho() {
               key={task.id}
               draggable
               onDragStart={(e) => handleDragStart(e, task.id)}
+              onClick={() => openEditModal(task)}
               className="bg-surface border border-border-subtle p-4 cursor-grab active:cursor-grabbing hover:border-accent/50 transition-colors group relative"
             >
               <div className="absolute left-0 top-0 bottom-0 w-1 bg-border-subtle group-hover:bg-accent/50 transition-colors"></div>
@@ -218,7 +269,7 @@ export default function Trabalho() {
                     +{task.xp_reward} XP
                   </span>
                   <button 
-                    onClick={() => handleDeleteTask(task.id)}
+                    onClick={(e) => { e.stopPropagation(); handleDeleteTask(task.id); }}
                     className="text-text-muted hover:text-error opacity-0 group-hover:opacity-100 transition-opacity"
                   >
                     <Trash2 className="w-3 h-3" />
@@ -406,6 +457,97 @@ export default function Trabalho() {
           </div>
         </div>
       </section>
+
+      {/* Modal de Edição */}
+      {isEditModalOpen && selectedTask && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" onClick={() => setIsEditModalOpen(false)}>
+          <div className="bg-surface-2 border border-border-subtle w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-6 border-b border-border-subtle sticky top-0 bg-surface-2 z-10">
+              <div className="flex items-center gap-3">
+                <div className="w-2 h-2 rounded-full bg-error animate-pulse"></div>
+                <h2 className="text-xl font-extrabold tracking-[-0.3px] uppercase">Detalhes da Tarefa</h2>
+              </div>
+              <button onClick={() => setIsEditModalOpen(false)} className="text-text-muted hover:text-error transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-6">
+              <div>
+                <label className="block text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2">Título</label>
+                <input 
+                  type="text" 
+                  value={editTitle} 
+                  onChange={(e) => setEditTitle(e.target.value)} 
+                  className="w-full bg-surface border border-border-subtle px-4 py-3 text-sm font-mono text-text-main focus:outline-none focus:border-error transition-colors uppercase" 
+                />
+              </div>
+              
+              <div>
+                <label className="block text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2">Descrição / Informações</label>
+                <textarea 
+                  value={editDescription} 
+                  onChange={(e) => setEditDescription(e.target.value)} 
+                  className="w-full bg-surface border border-border-subtle px-4 py-3 text-sm font-mono text-text-main focus:outline-none focus:border-error transition-colors min-h-[150px]" 
+                  placeholder="Adicione links, notas ou detalhes da tarefa..."
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <label className="block text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2">Prioridade</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['low', 'medium', 'high'] as Priority[]).map(p => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => setEditPriority(p)}
+                        className={`py-2 text-[10px] font-mono uppercase tracking-[0.1em] border transition-colors ${
+                          editPriority === p 
+                            ? getPriorityColor(p) 
+                            : 'bg-surface border-border-subtle text-text-muted hover:border-text-muted'
+                        }`}
+                      >
+                        {getPriorityLabel(p)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2">Deadline</label>
+                  <input 
+                    type="date" 
+                    value={editDeadline} 
+                    onChange={(e) => setEditDeadline(e.target.value)} 
+                    className="w-full bg-surface border border-border-subtle px-4 py-2 text-sm font-mono text-text-main focus:outline-none focus:border-error transition-colors uppercase" 
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2">Recompensa (XP)</label>
+                <input 
+                  type="number" 
+                  value={editXpReward} 
+                  onChange={(e) => setEditXpReward(Number(e.target.value))} 
+                  className="w-32 bg-surface border border-border-subtle px-4 py-2 text-sm font-mono text-text-main focus:outline-none focus:border-error transition-colors" 
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-4 p-6 border-t border-border-subtle bg-surface-3/30 sticky bottom-0">
+              <button onClick={() => setIsEditModalOpen(false)} className="btn-secondary flex items-center gap-2 text-xs py-2 px-6">
+                CANCELAR
+              </button>
+              <button onClick={handleSaveEdit} className="btn-primary !bg-error hover:!bg-error/80 !text-black flex items-center gap-2 text-xs py-2 px-6">
+                <Save className="w-4 h-4" />
+                SALVAR ALTERAÇÕES
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -16,12 +16,10 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
 
   const tabs = [
     { id: 'dashboard', label: 'OVERVIEW' },
-    { id: 'habitos', label: 'HÁBITOS' },
-    { id: 'missoes', label: 'MISSÕES' },
+    { id: 'acoes', label: 'AÇÕES' },
     { id: 'tesouro', label: 'TESOURO' },
     { id: 'niveis', label: 'NÍVEIS' },
     { id: 'trabalho', label: 'TRABALHO' },
-    { id: 'rotina', label: 'ROTINA' },
     { id: 'perfil', label: 'PERFIL' },
   ];
 

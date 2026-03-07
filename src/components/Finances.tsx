@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { ArrowUpRight, ArrowDownRight, Plus, Wallet, TrendingUp, Target, Coins, Activity, Calendar, DollarSign, X, Trash2 } from 'lucide-react';
+import { ArrowUpRight, ArrowDownRight, Plus, Wallet, TrendingUp, Target, Coins, Activity, Calendar, DollarSign, X, Trash2, ChevronDown, ChevronUp, MoreHorizontal, Edit2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 type SubTab = 'overview' | 'transactions' | 'patrimony' | 'treasures';
@@ -36,6 +36,9 @@ interface Treasure {
   xp?: number;
 }
 
+let cachedStocks: any[] | null = null;
+let cachedFiis: any[] | null = null;
+
 export default function Finances() {
   const [activeTab, setActiveTab] = useState<SubTab>('overview');
   const [loading, setLoading] = useState(true);
@@ -56,6 +59,8 @@ export default function Finances() {
   const [txDesc, setTxDesc] = useState('');
   const [txCategory, setTxCategory] = useState('Outros');
   const [txDate, setTxDate] = useState(new Date().toISOString().split('T')[0]);
+  const [editingTxId, setEditingTxId] = useState<string | null>(null);
+  const [openTxMenuId, setOpenTxMenuId] = useState<string | null>(null);
 
   // Form states - Asset
   const [assetTicker, setAssetTicker] = useState('');
@@ -64,6 +69,16 @@ export default function Finances() {
   const [assetQtd, setAssetQtd] = useState('');
   const [assetPm, setAssetPm] = useState('');
   const [assetCotacao, setAssetCotacao] = useState('');
+  const [isFetchingPrice, setIsFetchingPrice] = useState(false);
+  const [editingAssetId, setEditingAssetId] = useState<string | null>(null);
+  const [openAssetMenuId, setOpenAssetMenuId] = useState<string | null>(null);
+  
+  // Patrimony Groups state
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+
+  const toggleGroup = (type: string) => {
+    setExpandedGroups(prev => ({ ...prev, [type]: !prev[type] }));
+  };
 
   // Form states - Treasure
   const [treasureTitle, setTreasureTitle] = useState('');
@@ -74,6 +89,68 @@ export default function Finances() {
   useEffect(() => {
     fetchData();
   }, []);
+
+  useEffect(() => {
+    const fetchPrice = async () => {
+      if (!assetTicker || assetTicker.length < 3) return;
+      
+      setIsFetchingPrice(true);
+      try {
+        const ticker = assetTicker.toUpperCase();
+        let newPrice = '';
+        let newName = '';
+
+        if (assetType === 'Ação') {
+          if (!cachedStocks) {
+            const res = await fetch('https://mfinance.com.br/api/v1/stocks');
+            const data = await res.json();
+            cachedStocks = data.stocks || [];
+          }
+          const stock = cachedStocks?.find((s: any) => s.symbol === ticker);
+          if (stock && stock.lastPrice) {
+            newPrice = stock.lastPrice.toString();
+            newName = stock.name;
+          }
+        } else if (assetType === 'FII') {
+          if (!cachedFiis) {
+            const res = await fetch('https://mfinance.com.br/api/v1/fiis');
+            const data = await res.json();
+            cachedFiis = data.fiis || [];
+          }
+          const fii = cachedFiis?.find((f: any) => f.symbol === ticker);
+          if (fii && fii.lastPrice) {
+            newPrice = fii.lastPrice.toString();
+            newName = fii.name;
+          }
+        } else if (assetType === 'Crypto') {
+          const res = await fetch(`https://economia.awesomeapi.com.br/last/${ticker}-BRL`);
+          const data = await res.json();
+          const key = `${ticker}BRL`;
+          if (data[key] && data[key].bid) {
+            newPrice = parseFloat(data[key].bid).toFixed(2);
+            newName = data[key].name.split('/')[0];
+          }
+        }
+
+        if (newPrice) {
+          setAssetCotacao(newPrice);
+        }
+        if (newName && !assetName) {
+          setAssetName(newName);
+        }
+      } catch (error) {
+        console.error('Error fetching price:', error);
+      } finally {
+        setIsFetchingPrice(false);
+      }
+    };
+
+    const timeoutId = setTimeout(() => {
+      fetchPrice();
+    }, 800);
+
+    return () => clearTimeout(timeoutId);
+  }, [assetTicker, assetType]);
 
   const fetchData = async () => {
     setLoading(true);
@@ -118,28 +195,51 @@ export default function Finances() {
         date: txDate
       };
 
-      const { data, error } = await supabase
-        .from('financial_transactions')
-        .insert([newTx])
-        .select()
-        .single();
+      if (editingTxId) {
+        const { data, error } = await supabase
+          .from('financial_transactions')
+          .update(newTx)
+          .eq('id', editingTxId)
+          .select()
+          .single();
+        if (error) throw error;
+        setTransactions(transactions.map(t => t.id === editingTxId ? data : t).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+      } else {
+        const { data, error } = await supabase
+          .from('financial_transactions')
+          .insert([newTx])
+          .select()
+          .single();
+        if (error) throw error;
+        setTransactions([data, ...transactions].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+      }
 
-      if (error) throw error;
-
-      setTransactions([data, ...transactions].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
-      
       setIsTxModalOpen(false);
+      setEditingTxId(null);
       setTxAmount('');
       setTxDesc('');
       setTxCategory('Outros');
       setTxDate(new Date().toISOString().split('T')[0]);
     } catch (error) {
-      console.error('Error adding transaction:', error);
-      alert('Erro ao adicionar transação.');
+      console.error('Error saving transaction:', error);
+      alert('Erro ao salvar transação.');
     }
   };
 
+  const handleEditTx = (tx: Transaction) => {
+    setEditingTxId(tx.id);
+    setTxType(tx.type);
+    setTxAmount(Math.abs(tx.amount).toString());
+    setTxDesc(tx.description);
+    setTxCategory(tx.category);
+    setTxDate(tx.date);
+    setIsTxModalOpen(true);
+    setOpenTxMenuId(null);
+  };
+
   const handleDeleteTx = async (id: string) => {
+    if (!window.confirm('Tem certeza que deseja excluir esta transação?')) return;
+    
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -147,6 +247,7 @@ export default function Finances() {
       const { error } = await supabase.from('financial_transactions').delete().eq('id', id);
       if (error) throw error;
       setTransactions(transactions.filter(t => t.id !== id));
+      setOpenTxMenuId(null);
     } catch (error) {
       console.error('Error deleting transaction:', error);
     }
@@ -177,19 +278,45 @@ export default function Finances() {
         color
       };
 
-      const { data, error } = await supabase.from('financial_assets').insert([newAsset]).select().single();
-      if (error) throw error;
+      if (editingAssetId) {
+        const { data, error } = await supabase
+          .from('financial_assets')
+          .update(newAsset)
+          .eq('id', editingAssetId)
+          .select()
+          .single();
+        if (error) throw error;
+        setAssets(assets.map(a => a.id === editingAssetId ? data : a));
+      } else {
+        const { data, error } = await supabase.from('financial_assets').insert([newAsset]).select().single();
+        if (error) throw error;
+        setAssets([...assets, data]);
+      }
 
-      setAssets([...assets, data]);
       setIsAssetModalOpen(false);
+      setEditingAssetId(null);
       setAssetTicker(''); setAssetName(''); setAssetQtd(''); setAssetPm(''); setAssetCotacao('');
     } catch (error) {
-      console.error('Error adding asset:', error);
-      alert('Erro ao adicionar ativo. Verifique se a tabela financial_assets existe.');
+      console.error('Error saving asset:', error);
+      alert('Erro ao salvar ativo. Verifique se a tabela financial_assets existe.');
     }
   };
 
+  const handleEditAsset = (asset: Asset) => {
+    setEditingAssetId(asset.id);
+    setAssetTicker(asset.ticker);
+    setAssetName(asset.name);
+    setAssetType(asset.type);
+    setAssetQtd(asset.qtd.toString());
+    setAssetPm(asset.pm.toString());
+    setAssetCotacao(asset.cotacao.toString());
+    setIsAssetModalOpen(true);
+    setOpenAssetMenuId(null);
+  };
+
   const handleDeleteAsset = async (id: string) => {
+    if (!window.confirm('Tem certeza que deseja excluir este ativo?')) return;
+    
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -197,6 +324,7 @@ export default function Finances() {
       const { error } = await supabase.from('financial_assets').delete().eq('id', id);
       if (error) throw error;
       setAssets(assets.filter(a => a.id !== id));
+      setOpenAssetMenuId(null);
     } catch (error) {
       console.error('Error deleting asset:', error);
     }
@@ -241,6 +369,7 @@ export default function Finances() {
   };
 
   const handleDeleteTreasure = async (id: string) => {
+    if (!window.confirm('Tem certeza que deseja excluir este tesouro?')) return;
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -431,7 +560,17 @@ export default function Finances() {
           <h2 className="text-xl font-extrabold tracking-[-0.3px] uppercase">Fluxo de Caixa</h2>
           <p className="text-xs font-mono text-text-muted mt-1">Histórico de receitas e despesas</p>
         </div>
-        <button onClick={() => setIsTxModalOpen(true)} className="btn-primary !bg-accent hover:!bg-accent/80 !text-black flex items-center gap-2">
+        <button 
+          onClick={() => {
+            setEditingTxId(null);
+            setTxAmount('');
+            setTxDesc('');
+            setTxCategory('Outros');
+            setTxDate(new Date().toISOString().split('T')[0]);
+            setIsTxModalOpen(true);
+          }} 
+          className="btn-primary !bg-accent hover:!bg-accent/80 !text-black flex items-center gap-2"
+        >
           <Plus className="w-4 h-4" />
           NOVA TRANSAÇÃO
         </button>
@@ -462,11 +601,39 @@ export default function Finances() {
                   <div className="w-1/4 text-xs font-mono text-text-muted">
                     {new Date(t.date).toLocaleDateString('pt-BR', { timeZone: 'UTC' })}
                   </div>
-                  <div className={`w-1/4 flex items-center justify-end gap-3 text-sm font-mono font-bold ${t.type === 'income' ? 'text-success' : 'text-error'}`}>
+                  <div className={`w-1/4 flex items-center justify-end gap-3 text-sm font-mono font-bold ${t.type === 'income' ? 'text-success' : 'text-error'} relative`}>
                     {t.type === 'income' ? '+' : '-'} R$ {Math.abs(t.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                    <button onClick={() => handleDeleteTx(t.id)} className="text-text-muted hover:text-error opacity-0 group-hover:opacity-100 transition-opacity">
-                      <Trash2 className="w-4 h-4" />
+                    <button 
+                      onClick={() => setOpenTxMenuId(openTxMenuId === t.id ? null : t.id)} 
+                      className="text-text-muted hover:text-text-main p-1 rounded hover:bg-surface-3 transition-colors"
+                    >
+                      <MoreHorizontal className="w-4 h-4" />
                     </button>
+                    
+                    {openTxMenuId === t.id && (
+                      <>
+                        <div 
+                          className="fixed inset-0 z-10" 
+                          onClick={() => setOpenTxMenuId(null)}
+                        ></div>
+                        <div className="absolute right-8 top-8 w-32 bg-surface-2 border border-border-subtle shadow-xl z-20 py-1 rounded">
+                          <button 
+                            onClick={() => handleEditTx(t)}
+                            className="w-full text-left px-4 py-2 text-xs font-mono uppercase tracking-[0.1em] text-text-main hover:bg-surface-3 flex items-center gap-2 transition-colors"
+                          >
+                            <Edit2 className="w-3 h-3" />
+                            Editar
+                          </button>
+                          <button 
+                            onClick={() => handleDeleteTx(t.id)}
+                            className="w-full text-left px-4 py-2 text-xs font-mono uppercase tracking-[0.1em] text-error hover:bg-error/10 flex items-center gap-2 transition-colors"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            Excluir
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               ))
@@ -506,84 +673,288 @@ export default function Finances() {
     </div>
   );
 
-  const renderPatrimony = () => (
-    <div className="space-y-6 animate-in fade-in duration-500">
-      <div className="flex justify-between items-end mb-6">
-        <div>
-          <h2 className="text-xl font-extrabold tracking-[-0.3px] uppercase">Carteira de Investimentos</h2>
-          <p className="text-xs font-mono text-text-muted mt-1">Ativos, cotações e rentabilidade</p>
+  const [isUpdatingPrices, setIsUpdatingPrices] = useState(false);
+
+  const handleUpdatePrices = async () => {
+    setIsUpdatingPrices(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        alert('Você está no Modo Teste. Faça login para atualizar cotações automaticamente.');
+        setIsUpdatingPrices(false);
+        return;
+      }
+
+      // Fetch all stocks and FIIs
+      const [stocksRes, fiisRes] = await Promise.all([
+        fetch('https://mfinance.com.br/api/v1/stocks').then(r => r.json()).catch(() => ({ stocks: [] })),
+        fetch('https://mfinance.com.br/api/v1/fiis').then(r => r.json()).catch(() => ({ fiis: [] }))
+      ]);
+
+      const stocksData = stocksRes.stocks || [];
+      const fiisData = fiisRes.fiis || [];
+
+      let updatedCount = 0;
+
+      for (const asset of assets) {
+        let newPrice = asset.cotacao;
+        const ticker = asset.ticker.toUpperCase();
+
+        if (asset.type === 'Ação') {
+          const stock = stocksData.find((s: any) => s.symbol === ticker);
+          if (stock && stock.lastPrice) newPrice = stock.lastPrice;
+        } else if (asset.type === 'FII') {
+          const fii = fiisData.find((f: any) => f.symbol === ticker);
+          if (fii && fii.lastPrice) newPrice = fii.lastPrice;
+        } else if (asset.type === 'Crypto') {
+          try {
+            // Try awesomeapi for crypto (e.g., BTC-BRL)
+            const cryptoRes = await fetch(`https://economia.awesomeapi.com.br/last/${ticker}-BRL`);
+            const cryptoData = await cryptoRes.json();
+            const key = `${ticker}BRL`;
+            if (cryptoData[key] && cryptoData[key].bid) {
+              newPrice = parseFloat(cryptoData[key].bid);
+            }
+          } catch (e) {
+            console.error(`Failed to fetch crypto ${ticker}`, e);
+          }
+        }
+
+        if (newPrice !== asset.cotacao) {
+          const { error } = await supabase
+            .from('financial_assets')
+            .update({ cotacao: newPrice })
+            .eq('id', asset.id);
+          
+          if (!error) {
+            updatedCount++;
+          }
+        }
+      }
+
+      if (updatedCount > 0) {
+        await fetchData(); // Refresh data
+        alert(`${updatedCount} cotações atualizadas com sucesso!`);
+      } else {
+        alert('Nenhuma cotação precisou ser atualizada ou tickers não encontrados.');
+      }
+
+    } catch (error) {
+      console.error('Error updating prices:', error);
+      alert('Erro ao atualizar cotações.');
+    } finally {
+      setIsUpdatingPrices(false);
+    }
+  };
+
+  const renderPatrimony = () => {
+    const totalCurrentPatrimony = assets.reduce((acc, curr) => acc + (curr.qtd * curr.cotacao), 0);
+    const totalInvestedPatrimony = assets.reduce((acc, curr) => acc + (curr.qtd * curr.pm), 0);
+    
+    const groupedAssets = assets.reduce((acc, asset) => {
+      if (!acc[asset.type]) acc[asset.type] = [];
+      acc[asset.type].push(asset);
+      return acc;
+    }, {} as Record<string, Asset[]>);
+
+    return (
+      <div className="space-y-6 animate-in fade-in duration-500">
+        <div className="flex justify-between items-end mb-6">
+          <div>
+            <h2 className="text-xl font-extrabold tracking-[-0.3px] uppercase">
+              Carteira de Investimentos <span className="text-text-muted text-sm font-mono">({assets.length})</span>
+            </h2>
+            <p className="text-xs font-mono text-text-muted mt-1">Ativos, cotações e rentabilidade</p>
+          </div>
+          <div className="flex gap-3">
+            <button 
+              onClick={handleUpdatePrices} 
+              disabled={isUpdatingPrices}
+              className="btn-secondary flex items-center gap-2 disabled:opacity-50"
+            >
+              <Activity className={`w-4 h-4 ${isUpdatingPrices ? 'animate-spin' : ''}`} />
+              {isUpdatingPrices ? 'ATUALIZANDO...' : 'ATUALIZAR COTAÇÕES'}
+            </button>
+            <button 
+              onClick={() => {
+                setEditingAssetId(null);
+                setAssetTicker(''); setAssetName(''); setAssetQtd(''); setAssetPm(''); setAssetCotacao('');
+                setIsAssetModalOpen(true);
+              }} 
+              className="btn-primary !bg-accent hover:!bg-accent/80 !text-black flex items-center gap-2"
+            >
+              <Plus className="w-4 h-4" />
+              ADICIONAR ATIVO
+            </button>
+          </div>
         </div>
-        <button onClick={() => setIsAssetModalOpen(true)} className="btn-primary !bg-accent hover:!bg-accent/80 !text-black flex items-center gap-2">
-          <Plus className="w-4 h-4" />
-          ADICIONAR ATIVO
-        </button>
-      </div>
 
-      <div className="bg-surface-2 border border-border-subtle overflow-x-auto">
-        <table className="w-full text-left border-collapse">
-          <thead>
-            <tr className="border-b border-border-subtle bg-surface-3/50">
-              <th className="p-4 text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] font-normal">Ativo</th>
-              <th className="p-4 text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] font-normal">Tipo</th>
-              <th className="p-4 text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] font-normal text-right">Qtd</th>
-              <th className="p-4 text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] font-normal text-right">P. Médio</th>
-              <th className="p-4 text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] font-normal text-right">Cotação</th>
-              <th className="p-4 text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] font-normal text-right">Valor Atual</th>
-              <th className="p-4 text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] font-normal text-right">Var %</th>
-              <th className="p-4"></th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border-subtle">
-            {assets.length === 0 ? (
-              <tr>
-                <td colSpan={8} className="p-8 text-center text-xs font-mono text-text-muted uppercase">Nenhum ativo registrado.</td>
-              </tr>
-            ) : (
-              assets.map(asset => {
-                const valorAtual = asset.qtd * asset.cotacao;
-                const variacao = asset.pm > 0 ? ((asset.cotacao - asset.pm) / asset.pm) * 100 : 0;
-                const isPositive = variacao >= 0;
+        <div className="space-y-4">
+          {Object.entries(groupedAssets).map(([type, groupAssets]) => {
+            const groupInvested = groupAssets.reduce((acc, curr) => acc + (curr.qtd * curr.pm), 0);
+            const groupCurrent = groupAssets.reduce((acc, curr) => acc + (curr.qtd * curr.cotacao), 0);
+            const groupVariation = groupInvested > 0 ? ((groupCurrent - groupInvested) / groupInvested) * 100 : 0;
+            const groupPercent = totalCurrentPatrimony > 0 ? (groupCurrent / totalCurrentPatrimony) * 100 : 0;
+            const isPositive = groupVariation >= 0;
+            const isExpanded = expandedGroups[type];
 
-                return (
-                  <tr key={asset.id} className="hover:bg-surface transition-colors group cursor-pointer">
-                    <td className="p-4">
-                      <div className="font-bold text-sm uppercase text-text-main group-hover:text-accent transition-colors">{asset.ticker}</div>
-                      <div className="text-[10px] font-mono text-text-muted">{asset.name}</div>
-                    </td>
-                    <td className="p-4">
-                      <span className={`text-[9px] font-mono px-2 py-1 border uppercase tracking-[0.05em] ${asset.color}`}>
-                        {asset.type}
-                      </span>
-                    </td>
-                    <td className="p-4 text-right font-mono text-sm text-text-muted">{asset.qtd}</td>
-                    <td className="p-4 text-right font-mono text-sm text-text-muted">R$ {asset.pm.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                    <td className="p-4 text-right font-mono text-sm text-text-main">R$ {asset.cotacao.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                    <td className="p-4 text-right font-mono text-sm font-bold text-text-main">R$ {valorAtual.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                    <td className={`p-4 text-right font-mono text-sm font-bold flex items-center justify-end gap-1 ${isPositive ? 'text-success' : 'text-error'}`}>
-                      {isPositive ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
-                      {Math.abs(variacao).toFixed(2)}%
-                    </td>
-                    <td className="p-4 text-right">
-                      <button onClick={() => handleDeleteAsset(asset.id)} className="text-text-muted hover:text-error opacity-0 group-hover:opacity-100 transition-opacity">
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-          <tfoot>
-            <tr className="bg-surface-3/30 border-t border-border-subtle">
-              <td colSpan={5} className="p-4 text-right text-[10px] font-mono text-text-muted uppercase tracking-[0.1em]">TOTAL INVESTIDO:</td>
-              <td className="p-4 text-right font-mono text-base font-black text-accent">R$ {totalInvested.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-              <td colSpan={2}></td>
-            </tr>
-          </tfoot>
-        </table>
+            return (
+              <div key={type} className="bg-surface-2 border border-border-subtle rounded-lg overflow-hidden">
+                {/* Group Header */}
+                <div 
+                  className="p-4 flex items-center justify-between cursor-pointer hover:bg-surface-3/30 transition-colors"
+                  onClick={() => toggleGroup(type)}
+                >
+                  <div className="flex items-center gap-3 w-1/4">
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center border ${groupAssets[0]?.color}`}>
+                      <Wallet className="w-4 h-4" />
+                    </div>
+                    <span className="font-bold text-lg uppercase tracking-[-0.5px]">{type}</span>
+                  </div>
+
+                  <div className="flex items-center justify-between flex-1 px-4">
+                    <div className="text-center">
+                      <div className="text-[10px] font-mono text-text-muted uppercase mb-1">Ativos</div>
+                      <div className="font-bold">{groupAssets.length}</div>
+                    </div>
+                    
+                    <div className="text-center">
+                      <div className="text-[10px] font-mono text-text-muted uppercase mb-1">Valor Total</div>
+                      <div className="font-bold">R$ {groupCurrent.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                    </div>
+
+                    <div className="text-center">
+                      <div className="text-[10px] font-mono text-text-muted uppercase mb-1">Valorização</div>
+                      <div className={`font-bold ${isPositive ? 'text-success' : 'text-error'}`}>
+                        {isPositive ? '+' : ''}R$ {(groupCurrent - groupInvested).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      </div>
+                    </div>
+
+                    <div className="text-center">
+                      <div className="text-[10px] font-mono text-text-muted uppercase mb-1">Variação</div>
+                      <div className={`font-bold flex items-center justify-center gap-1 ${isPositive ? 'text-success' : 'text-error'}`}>
+                        {isPositive ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
+                        {Math.abs(groupVariation).toFixed(2)}%
+                      </div>
+                    </div>
+
+                    <div className="text-center">
+                      <div className="text-[10px] font-mono text-text-muted uppercase mb-1">% na Carteira</div>
+                      <div className="font-bold text-text-muted">{groupPercent.toFixed(2)}%</div>
+                    </div>
+                  </div>
+
+                  <div className="w-10 flex justify-end">
+                    {isExpanded ? <ChevronUp className="w-5 h-5 text-text-muted" /> : <ChevronDown className="w-5 h-5 text-text-muted" />}
+                  </div>
+                </div>
+
+                {/* Group Content (Table) */}
+                {isExpanded && (
+                  <div className="border-t border-border-subtle bg-surface overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="border-b border-border-subtle bg-surface-3/20">
+                          <th className="p-3 text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] font-normal">Ativo</th>
+                          <th className="p-3 text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] font-normal text-right">Quant.</th>
+                          <th className="p-3 text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] font-normal text-right">Preço Médio</th>
+                          <th className="p-3 text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] font-normal text-right">Preço Atual</th>
+                          <th className="p-3 text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] font-normal text-right">Saldo Total</th>
+                          <th className="p-3 text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] font-normal text-right">Valorização</th>
+                          <th className="p-3 text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] font-normal text-right">Variação</th>
+                          <th className="p-3 text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] font-normal text-right">% Carteira</th>
+                          <th className="p-3"></th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border-subtle">
+                        {groupAssets.map(asset => {
+                          const valorInvestido = asset.qtd * asset.pm;
+                          const valorAtual = asset.qtd * asset.cotacao;
+                          const saldo = valorAtual - valorInvestido;
+                          const variacao = asset.pm > 0 ? ((asset.cotacao - asset.pm) / asset.pm) * 100 : 0;
+                          const percentCarteira = totalCurrentPatrimony > 0 ? (valorAtual / totalCurrentPatrimony) * 100 : 0;
+                          const isAssetPositive = variacao >= 0;
+
+                          return (
+                            <tr key={asset.id} className="hover:bg-surface-2 transition-colors group">
+                              <td className="p-3">
+                                <div className="flex items-center gap-3">
+                                  <div className={`w-6 h-6 rounded flex items-center justify-center border text-[10px] font-bold ${asset.color}`}>
+                                    {asset.ticker.substring(0, 2)}
+                                  </div>
+                                  <div>
+                                    <div className="font-bold text-sm uppercase text-text-main">{asset.ticker}</div>
+                                    <div className="text-[10px] font-mono text-text-muted">{asset.name}</div>
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="p-3 text-right font-mono text-sm text-text-muted">{asset.qtd}</td>
+                              <td className="p-3 text-right font-mono text-sm text-text-muted">R$ {asset.pm.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                              <td className="p-3 text-right font-mono text-sm text-text-main">R$ {asset.cotacao.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                              <td className="p-3 text-right font-mono text-sm font-bold text-text-main">R$ {valorAtual.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                              <td className={`p-3 text-right font-mono text-sm font-bold ${saldo >= 0 ? 'text-success' : 'text-error'}`}>
+                                {saldo >= 0 ? '+' : ''}R$ {saldo.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                              </td>
+                              <td className="p-3 text-right">
+                                <div className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-bold ${isAssetPositive ? 'bg-success/10 text-success' : 'bg-error/10 text-error'}`}>
+                                  {isAssetPositive ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
+                                  {Math.abs(variacao).toFixed(2)}%
+                                </div>
+                              </td>
+                              <td className="p-3 text-right font-mono text-sm text-text-muted">{percentCarteira.toFixed(2)}%</td>
+                              <td className="p-3 text-right relative">
+                                <button 
+                                  onClick={() => setOpenAssetMenuId(openAssetMenuId === asset.id ? null : asset.id)} 
+                                  className="text-text-muted hover:text-text-main p-1 rounded hover:bg-surface-3 transition-colors"
+                                >
+                                  <MoreHorizontal className="w-4 h-4" />
+                                </button>
+                                
+                                {openAssetMenuId === asset.id && (
+                                  <>
+                                    <div 
+                                      className="fixed inset-0 z-10" 
+                                      onClick={() => setOpenAssetMenuId(null)}
+                                    ></div>
+                                    <div className="absolute right-8 top-8 w-32 bg-surface-2 border border-border-subtle shadow-xl z-20 py-1 rounded">
+                                      <button 
+                                        onClick={() => handleEditAsset(asset)}
+                                        className="w-full text-left px-4 py-2 text-xs font-mono uppercase tracking-[0.1em] text-text-main hover:bg-surface-3 flex items-center gap-2 transition-colors"
+                                      >
+                                        <Edit2 className="w-3 h-3" />
+                                        Editar
+                                      </button>
+                                      <button 
+                                        onClick={() => handleDeleteAsset(asset.id)}
+                                        className="w-full text-left px-4 py-2 text-xs font-mono uppercase tracking-[0.1em] text-error hover:bg-error/10 flex items-center gap-2 transition-colors"
+                                      >
+                                        <Trash2 className="w-3 h-3" />
+                                        Excluir
+                                      </button>
+                                    </div>
+                                  </>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {assets.length === 0 && (
+            <div className="p-12 text-center text-xs font-mono text-text-muted uppercase border border-border-subtle bg-surface-2">
+              Nenhum ativo registrado.
+            </div>
+          )}
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const renderTreasures = () => (
     <div className="space-y-6 animate-in fade-in duration-500">
@@ -727,7 +1098,7 @@ export default function Finances() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg/80 backdrop-blur-sm p-4 animate-in fade-in">
           <div className="bg-surface-2 border border-border-subtle w-full max-w-md shadow-2xl">
             <div className="flex justify-between items-center p-4 border-b border-border-subtle bg-surface-3/50">
-              <h3 className="text-sm font-bold uppercase tracking-[0.1em]">Nova Transação</h3>
+              <h3 className="text-sm font-bold uppercase tracking-[0.1em]">{editingTxId ? 'Editar Transação' : 'Nova Transação'}</h3>
               <button onClick={() => setIsTxModalOpen(false)} className="text-text-muted hover:text-error transition-colors">
                 <X className="w-5 h-5" />
               </button>
@@ -766,7 +1137,7 @@ export default function Finances() {
               </div>
 
               <button type="submit" className={`w-full py-4 text-[11px] font-mono font-bold uppercase tracking-[0.1em] transition-colors ${txType === 'income' ? 'bg-success hover:bg-success/80 text-black' : 'bg-error hover:bg-error/80 text-black'}`}>
-                REGISTRAR {txType === 'income' ? 'RECEITA' : 'DESPESA'}
+                {editingTxId ? 'SALVAR ALTERAÇÕES' : `REGISTRAR ${txType === 'income' ? 'RECEITA' : 'DESPESA'}`}
               </button>
             </form>
           </div>
@@ -778,7 +1149,7 @@ export default function Finances() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg/80 backdrop-blur-sm p-4 animate-in fade-in">
           <div className="bg-surface-2 border border-border-subtle w-full max-w-md shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center p-4 border-b border-border-subtle bg-surface-3/50">
-              <h3 className="text-sm font-bold uppercase tracking-[0.1em]">Adicionar Ativo</h3>
+              <h3 className="text-sm font-bold uppercase tracking-[0.1em]">{editingAssetId ? 'Editar Ativo' : 'Adicionar Ativo'}</h3>
               <button onClick={() => setIsAssetModalOpen(false)} className="text-text-muted hover:text-error transition-colors"><X className="w-5 h-5" /></button>
             </div>
             <form onSubmit={handleAddAsset} className="p-6 space-y-4">
@@ -810,11 +1181,14 @@ export default function Finances() {
                 </div>
               </div>
               <div>
-                <label className="block text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2">Cotação Atual (R$)</label>
+                <label className="block text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2 flex items-center gap-2">
+                  Cotação Atual (R$)
+                  {isFetchingPrice && <Activity className="w-3 h-3 text-accent animate-spin" />}
+                </label>
                 <input type="number" step="0.01" required value={assetCotacao} onChange={e => setAssetCotacao(e.target.value)} className="w-full bg-surface border border-border-subtle px-4 py-3 text-sm font-mono text-text-main focus:outline-none focus:border-accent transition-colors" placeholder="0.00" />
               </div>
               <button type="submit" className="w-full py-4 text-[11px] font-mono font-bold uppercase tracking-[0.1em] transition-colors bg-accent hover:bg-accent/80 text-black mt-4">
-                SALVAR ATIVO
+                {editingAssetId ? 'SALVAR ALTERAÇÕES' : 'SALVAR ATIVO'}
               </button>
             </form>
           </div>

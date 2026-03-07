@@ -6,12 +6,10 @@
 import React, { useState, useEffect } from 'react';
 import Layout from './components/Layout';
 import Dashboard from './components/Dashboard';
-import Habitos from './components/Habitos';
-import Tasks from './components/Tasks';
+import Acoes from './components/Acoes';
 import Finances from './components/Finances';
 import Levels from './components/Levels';
 import Trabalho from './components/Trabalho';
-import Rotina from './components/Rotina';
 import Perfil from './components/Perfil';
 import Auth from './components/Auth';
 import { supabase } from './lib/supabase';
@@ -63,12 +61,10 @@ export default function App() {
       onLogout={handleLogout}
     >
       {activeTab === 'dashboard' && <Dashboard />}
-      {activeTab === 'habitos' && <Habitos />}
-      {activeTab === 'missoes' && <Tasks />}
+      {activeTab === 'acoes' && <Acoes />}
       {activeTab === 'tesouro' && <Finances />}
       {activeTab === 'niveis' && <Levels />}
       {activeTab === 'trabalho' && <Trabalho />}
-      {activeTab === 'rotina' && <Rotina />}
       {activeTab === 'perfil' && <Perfil />}
     </Layout>
   );
