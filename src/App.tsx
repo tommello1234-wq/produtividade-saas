@@ -13,6 +13,7 @@ import Levels from './components/Levels';
 import Trabalho from './components/Trabalho';
 import Academy from './components/Academy';
 import Perfil from './components/Perfil';
+import SegundoCerebro from './components/SegundoCerebro';
 import Auth from './components/Auth';
 import { supabase } from './lib/supabase';
 
@@ -70,6 +71,7 @@ export default function App() {
       {activeTab === 'trabalho' && <Trabalho />}
       {activeTab === 'academy' && <Academy />}
       {activeTab === 'perfil' && <Perfil />}
+      {activeTab === 'segundo-cerebro' && <SegundoCerebro />}
     </Layout>
   );
 }

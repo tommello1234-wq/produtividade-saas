@@ -1545,13 +1545,19 @@ export default function Academy() {
                 <PanelLeft className="w-5 h-5" />
               </button>
             </div>
-            <div className="flex-1 flex flex-col items-center justify-center text-text-muted p-8 text-center">
-              <BookOpen className="w-16 h-16 mb-6 opacity-20" />
-              <h2 className="text-xl font-bold uppercase tracking-widest mb-2">Nenhuma Seção Selecionada</h2>
-              <p className="text-sm font-mono max-w-md">
-                Selecione ou crie uma seção no menu lateral para visualizar ou editar os conteúdos.
-              </p>
-            </div>
+            {!isInitialized ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-text-muted p-8 text-center">
+                <div className="text-accent font-mono text-xs animate-pulse tracking-[0.2em]">CARREGANDO ACADEMY...</div>
+              </div>
+            ) : (
+              <div className="flex-1 flex flex-col items-center justify-center text-text-muted p-8 text-center">
+                <BookOpen className="w-16 h-16 mb-6 opacity-20" />
+                <h2 className="text-xl font-bold uppercase tracking-widest mb-2">Nenhuma Seção Selecionada</h2>
+                <p className="text-sm font-mono max-w-md">
+                  Selecione ou crie uma seção no menu lateral para visualizar ou editar os conteúdos.
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>

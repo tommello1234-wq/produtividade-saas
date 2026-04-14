@@ -24,6 +24,7 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
     { id: 'trabalho', label: 'TRABALHO' },
     { id: 'academy', label: 'ACADEMY' },
     { id: 'perfil', label: 'PERFIL' },
+    { id: 'segundo-cerebro', label: 'SEGUNDO CÉREBRO' },
   ];
 
   useEffect(() => {
