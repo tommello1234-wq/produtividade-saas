@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { LogOut } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { JarvisChat } from './JarvisChat';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -17,9 +18,11 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
   const tabs = [
     { id: 'dashboard', label: 'OVERVIEW' },
     { id: 'acoes', label: 'AÇÕES' },
+    { id: 'vendas', label: 'VENDAS' },
     { id: 'tesouro', label: 'TESOURO' },
     { id: 'niveis', label: 'NÍVEIS' },
     { id: 'trabalho', label: 'TRABALHO' },
+    { id: 'academy', label: 'ACADEMY' },
     { id: 'perfil', label: 'PERFIL' },
   ];
 
@@ -29,7 +32,14 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
     // Set up a simple interval to refresh metrics every 10 seconds
     // (A more robust solution would use Supabase Realtime subscriptions)
     const interval = setInterval(fetchGlobalMetrics, 10000);
-    return () => clearInterval(interval);
+    
+    const handleRefresh = () => fetchGlobalMetrics();
+    window.addEventListener('app_data_changed', handleRefresh);
+    
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('app_data_changed', handleRefresh);
+    };
   }, []);
 
   const fetchGlobalMetrics = async () => {
@@ -147,6 +157,7 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
             {children}
           </div>
         </main>
+        <JarvisChat />
       </div>
     </div>
   );

@@ -31,16 +31,27 @@ interface HabitLog {
   habit_id: string;
 }
 
+const getLocalDateString = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 export default function Dashboard() {
   const [habits, setHabits] = useState<Habit[]>([]);
   const [habitLogs, setHabitLogs] = useState<HabitLog[]>([]);
   const [balance, setBalance] = useState(0);
   const [pendingTasks, setPendingTasks] = useState(0);
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getLocalDateString(new Date());
 
   useEffect(() => {
     fetchDashboardData();
+
+    const handleRefresh = () => fetchDashboardData();
+    window.addEventListener('app_data_changed', handleRefresh);
+    return () => window.removeEventListener('app_data_changed', handleRefresh);
   }, []);
 
   const fetchDashboardData = async () => {
@@ -192,17 +203,27 @@ export default function Dashboard() {
           {/* Hábitos de Hoje */}
           <div className="lg:col-span-2 bg-surface-2 border border-border-subtle p-6">
             <div className="text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] mb-6 flex justify-between">
-              <span>Hábitos Pendentes</span>
-              <span>{habitLogs.length} / {habits.length} CONCLUÍDOS</span>
+              <span>Hábitos de Hoje</span>
+              <span>{habitLogs.length} / {habits.filter(h => {
+                const habitDays = h.title.split('|days:')[1] ? h.title.split('|days:')[1].split(',').map(Number) : [0, 1, 2, 3, 4, 5, 6];
+                return habitDays.includes(new Date().getDay());
+              }).length} CONCLUÍDOS</span>
             </div>
             <div className="space-y-3">
-              {habits.length === 0 ? (
+              {habits.filter(h => {
+                const habitDays = h.title.split('|days:')[1] ? h.title.split('|days:')[1].split(',').map(Number) : [0, 1, 2, 3, 4, 5, 6];
+                return habitDays.includes(new Date().getDay());
+              }).length === 0 ? (
                 <div className="p-8 text-center text-xs font-mono text-text-muted uppercase border border-border-subtle bg-surface">
-                  Nenhum hábito cadastrado.
+                  Nenhum hábito para hoje.
                 </div>
               ) : (
-                habits.map(habit => {
+                habits.filter(h => {
+                  const habitDays = h.title.split('|days:')[1] ? h.title.split('|days:')[1].split(',').map(Number) : [0, 1, 2, 3, 4, 5, 6];
+                  return habitDays.includes(new Date().getDay());
+                }).map(habit => {
                   const isDone = habitLogs.some(l => l.habit_id === habit.id);
+                  const displayTitle = habit.title.split('|days:')[0];
                   return (
                     <button
                       key={habit.id}
@@ -220,7 +241,7 @@ export default function Dashboard() {
                           <Circle className="w-5 h-5 text-text-muted" />
                         )}
                         <span className={`font-mono text-sm uppercase tracking-[0.05em] ${isDone ? 'text-text-muted line-through' : 'text-text-main'}`}>
-                          {habit.title}
+                          {displayTitle}
                         </span>
                       </div>
                       <span className={`text-[10px] font-mono font-bold ${isDone ? 'text-success' : 'text-accent'}`}>

@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { ArrowUpRight, ArrowDownRight, Plus, Wallet, TrendingUp, Target, Coins, Activity, Calendar, DollarSign, X, Trash2, ChevronDown, ChevronUp, MoreHorizontal, Edit2 } from 'lucide-react';
+import { ArrowUpRight, ArrowDownRight, Plus, Wallet, TrendingUp, Target, Coins, Activity, Calendar, DollarSign, X, Trash2, ChevronDown, ChevronUp, MoreHorizontal, Edit2, Check, Settings } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
-type SubTab = 'overview' | 'transactions' | 'patrimony' | 'treasures';
+type SubTab = 'overview' | 'transactions' | 'patrimony' | 'treasures' | 'sales';
 
 interface Transaction {
   id: string;
@@ -41,7 +41,9 @@ let cachedFiis: any[] | null = null;
 
 export default function Finances() {
   const [activeTab, setActiveTab] = useState<SubTab>('overview');
+  const [txTab, setTxTab] = useState<'income' | 'expense'>('expense');
   const [loading, setLoading] = useState(true);
+  const [expandedMonths, setExpandedMonths] = useState<Record<string, boolean>>({});
   
   // Modals state
   const [isTxModalOpen, setIsTxModalOpen] = useState(false);
@@ -57,10 +59,20 @@ export default function Finances() {
   const [txType, setTxType] = useState<'income'|'expense'>('expense');
   const [txAmount, setTxAmount] = useState('');
   const [txDesc, setTxDesc] = useState('');
-  const [txCategory, setTxCategory] = useState('Outros');
+  const [txCategory, setTxCategory] = useState('Outros|#9CA3AF');
+  const [txIsRecurring, setTxIsRecurring] = useState(false);
   const [txDate, setTxDate] = useState(new Date().toISOString().split('T')[0]);
   const [editingTxId, setEditingTxId] = useState<string | null>(null);
   const [openTxMenuId, setOpenTxMenuId] = useState<string | null>(null);
+  
+  // Custom Tags state
+  const [isCreatingTag, setIsCreatingTag] = useState(false);
+  const [newTagName, setNewTagName] = useState('');
+  const [newTagColor, setNewTagColor] = useState('#F97316');
+  const [customTags, setCustomTags] = useState<{name: string, color: string}[]>([]);
+  const [isManageTagsModalOpen, setIsManageTagsModalOpen] = useState(false);
+  const [editingTag, setEditingTag] = useState<{oldName: string, name: string, color: string} | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<{isOpen: boolean, title: string, message: string, onConfirm: () => void} | null>(null);
 
   // Form states - Asset
   const [assetTicker, setAssetTicker] = useState('');
@@ -86,8 +98,49 @@ export default function Finances() {
   const [treasureCurrent, setTreasureCurrent] = useState('');
   const [treasureDeadline, setTreasureDeadline] = useState('');
 
+  const [userId, setUserId] = useState<string | null>(null);
+  const [isSyncingAsaas, setIsSyncingAsaas] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<{type: 'success' | 'error' | 'info', text: string} | null>(null);
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      if (data?.user) setUserId(data.user.id);
+    });
+  }, []);
+
+  const existingTags = React.useMemo(() => {
+    const tagsMap = new Map<string, string>();
+    
+    customTags.forEach(tag => {
+      tagsMap.set(tag.name, tag.color);
+    });
+
+    transactions.forEach(t => {
+      let cat = t.category;
+      if (cat.endsWith('|recurring')) {
+        cat = cat.replace('|recurring', '');
+      }
+      if (cat.includes('|')) {
+        const [name, color] = cat.split('|');
+        if (!tagsMap.has(name)) {
+          tagsMap.set(name, color);
+        }
+      } else {
+        if (!tagsMap.has(cat)) {
+          tagsMap.set(cat, '#9CA3AF');
+        }
+      }
+    });
+
+    return Array.from(tagsMap.entries()).map(([name, color]) => ({ name, color }));
+  }, [transactions, customTags]);
+
   useEffect(() => {
     fetchData();
+
+    const handleRefresh = () => fetchData();
+    window.addEventListener('app_data_changed', handleRefresh);
+    return () => window.removeEventListener('app_data_changed', handleRefresh);
   }, []);
 
   useEffect(() => {
@@ -164,7 +217,93 @@ export default function Finances() {
         supabase.from('financial_treasures').select('*').eq('user_id', user.id)
       ]);
 
-      if (txRes.data) setTransactions(txRes.data);
+      if (txRes.data) {
+        const tagsTx = txRes.data.find(t => t.description === '__FINANCIAL_TAGS__');
+        if (tagsTx) {
+          try {
+            setCustomTags(JSON.parse(tagsTx.category));
+          } catch (e) {
+            console.error('Failed to parse tags', e);
+          }
+        } else {
+          setCustomTags([
+            { name: 'Empresa', color: '#E8A0BF' },
+            { name: 'Sobrevivência', color: '#A3D9B1' },
+            { name: 'Lazer', color: '#D9B873' },
+            { name: 'Investimentos', color: '#60A5FA' },
+            { name: 'Outros', color: '#9CA3AF' }
+          ]);
+        }
+
+        const realTransactions = txRes.data.filter(t => 
+          t.description !== '__FINANCIAL_TAGS__' && 
+          !t.description.includes('[Asaas]') && 
+          !t.description.includes('[CNPJ]')
+        );
+        setTransactions(realTransactions);
+        
+        // Auto-generate recurring transactions for current month
+        const currentMonth = new Date().getMonth();
+        const currentYear = new Date().getFullYear();
+
+        const latestByDesc = new Map<string, Transaction>();
+        
+        realTransactions.forEach(t => {
+          const existing = latestByDesc.get(t.description);
+          if (!existing || new Date(t.date) > new Date(existing.date)) {
+            latestByDesc.set(t.description, t);
+          }
+        });
+
+        const newTransactionsToInsert: any[] = [];
+
+        latestByDesc.forEach(tx => {
+          if (tx.category.endsWith('|recurring')) {
+            const [txYear, txMonth, txDay] = tx.date.split('-');
+            const txDate = new Date(parseInt(txYear), parseInt(txMonth) - 1, parseInt(txDay));
+            
+            if (txDate.getFullYear() < currentYear || (txDate.getFullYear() === currentYear && txDate.getMonth() < currentMonth)) {
+              const hasCurrentMonthTx = realTransactions.some(t => {
+                const [tYear, tMonth, tDay] = t.date.split('-');
+                const d = new Date(parseInt(tYear), parseInt(tMonth) - 1, parseInt(tDay));
+                return t.description === tx.description && d.getMonth() === currentMonth && d.getFullYear() === currentYear;
+              });
+
+              if (!hasCurrentMonthTx) {
+                const newDate = new Date(currentYear, currentMonth, txDate.getDate());
+                if (newDate.getMonth() !== currentMonth) {
+                  newDate.setDate(0);
+                }
+                
+                // Format to YYYY-MM-DD safely
+                const yyyy = newDate.getFullYear();
+                const mm = String(newDate.getMonth() + 1).padStart(2, '0');
+                const dd = String(newDate.getDate()).padStart(2, '0');
+
+                newTransactionsToInsert.push({
+                  user_id: user.id,
+                  description: tx.description,
+                  category: tx.category,
+                  amount: tx.amount,
+                  type: tx.type,
+                  date: `${yyyy}-${mm}-${dd}`
+                });
+              }
+            }
+          }
+        });
+
+        if (newTransactionsToInsert.length > 0) {
+          const { data, error } = await supabase
+            .from('financial_transactions')
+            .insert(newTransactionsToInsert)
+            .select();
+            
+          if (!error && data) {
+            setTransactions(prev => [...data, ...prev].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+          }
+        }
+      }
       if (assetsRes.data) setAssets(assetsRes.data);
       if (treasuresRes.data) setTreasures(treasuresRes.data);
     } catch (error) {
@@ -172,6 +311,127 @@ export default function Finances() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const saveTagsToDB = async (tags: {name: string, color: string}[]) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data, error: selectError } = await supabase
+        .from('financial_transactions')
+        .select('id')
+        .eq('user_id', user.id)
+        .eq('description', '__FINANCIAL_TAGS__');
+
+      if (selectError) {
+        console.error('Error selecting tags:', selectError);
+        return;
+      }
+
+      if (data && data.length > 0) {
+        // Update all existing tag rows to keep them in sync
+        for (const row of data) {
+          const { error: updateError } = await supabase
+            .from('financial_transactions')
+            .update({ category: JSON.stringify(tags) })
+            .eq('id', row.id);
+          if (updateError) console.error('Error updating tags:', updateError);
+        }
+      } else {
+        const { error: insertError } = await supabase
+          .from('financial_transactions')
+          .insert({
+            user_id: user.id,
+            description: '__FINANCIAL_TAGS__',
+            category: JSON.stringify(tags),
+            amount: 0,
+            type: 'expense',
+            date: new Date().toISOString().split('T')[0]
+          });
+        if (insertError) console.error('Error inserting tags:', insertError);
+      }
+    } catch (e) {
+      console.error('Error saving tags:', e);
+    }
+  };
+
+  const handleCreateTag = async () => {
+    if (!newTagName.trim()) return;
+    const newTag = { name: newTagName.trim(), color: newTagColor };
+    const updatedTags = [...customTags, newTag];
+    setCustomTags(updatedTags);
+    await saveTagsToDB(updatedTags);
+    setTxCategory(`${newTag.name}|${newTag.color}`);
+    setIsCreatingTag(false);
+  };
+
+  const handleUpdateTag = async (oldName: string, newName: string, newColor: string) => {
+    if (!newName.trim()) return;
+    
+    let updatedTags = customTags.map(t => t.name === oldName ? { name: newName.trim(), color: newColor } : t);
+    if (!customTags.some(t => t.name === oldName)) {
+      updatedTags.push({ name: newName.trim(), color: newColor });
+    }
+    setCustomTags(updatedTags);
+    await saveTagsToDB(updatedTags);
+
+    // Update all transactions that use the old tag
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const txsToUpdate = transactions.filter(t => {
+      const cat = t.category.replace('|recurring', '');
+      const [name] = cat.split('|');
+      return name === oldName;
+    });
+
+    for (const tx of txsToUpdate) {
+      const isRecurring = tx.category.endsWith('|recurring');
+      const newCat = `${newName.trim()}|${newColor}${isRecurring ? '|recurring' : ''}`;
+      await supabase
+        .from('financial_transactions')
+        .update({ category: newCat })
+        .eq('id', tx.id);
+    }
+    
+    setEditingTag(null);
+    fetchData();
+  };
+
+  const handleDeleteTag = async (tagName: string) => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Excluir Tag',
+      message: `Tem certeza que deseja excluir a tag "${tagName}"? As transações com esta tag serão movidas para "Outros".`,
+      onConfirm: async () => {
+        const updatedTags = customTags.filter(t => t.name !== tagName);
+        setCustomTags(updatedTags);
+        await saveTagsToDB(updatedTags);
+
+        // Update all transactions that use the old tag to "Outros|#9CA3AF"
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+
+        const txsToUpdate = transactions.filter(t => {
+          const cat = t.category.replace('|recurring', '');
+          const [name] = cat.split('|');
+          return name === tagName;
+        });
+
+        for (const tx of txsToUpdate) {
+          const isRecurring = tx.category.endsWith('|recurring');
+          const newCat = `Outros|#9CA3AF${isRecurring ? '|recurring' : ''}`;
+          await supabase
+            .from('financial_transactions')
+            .update({ category: newCat })
+            .eq('id', tx.id);
+        }
+
+        fetchData();
+        setConfirmDialog(null);
+      }
+    });
   };
 
   const handleAddTx = async (e: React.FormEvent) => {
@@ -186,10 +446,18 @@ export default function Finances() {
       }
 
       const amount = parseFloat(txAmount);
+      
+      let finalCategory = txCategory;
+      if (txIsRecurring && !finalCategory.endsWith('|recurring')) {
+        finalCategory += '|recurring';
+      } else if (!txIsRecurring && finalCategory.endsWith('|recurring')) {
+        finalCategory = finalCategory.replace('|recurring', '');
+      }
+
       const newTx = {
         user_id: user.id,
         description: txDesc,
-        category: txCategory,
+        category: finalCategory,
         amount: txType === 'expense' ? -Math.abs(amount) : Math.abs(amount),
         type: txType,
         date: txDate
@@ -203,7 +471,7 @@ export default function Finances() {
           .select()
           .single();
         if (error) throw error;
-        setTransactions(transactions.map(t => t.id === editingTxId ? data : t).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+        setTransactions(prev => prev.map(t => t.id === editingTxId ? data : t).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
       } else {
         const { data, error } = await supabase
           .from('financial_transactions')
@@ -211,15 +479,17 @@ export default function Finances() {
           .select()
           .single();
         if (error) throw error;
-        setTransactions([data, ...transactions].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+        setTransactions(prev => [data, ...prev].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
       }
 
       setIsTxModalOpen(false);
       setEditingTxId(null);
       setTxAmount('');
       setTxDesc('');
-      setTxCategory('Outros');
+      setTxCategory('Outros|#9CA3AF');
+      setTxIsRecurring(false);
       setTxDate(new Date().toISOString().split('T')[0]);
+      setIsCreatingTag(false);
     } catch (error) {
       console.error('Error saving transaction:', error);
       alert('Erro ao salvar transação.');
@@ -231,26 +501,50 @@ export default function Finances() {
     setTxType(tx.type);
     setTxAmount(Math.abs(tx.amount).toString());
     setTxDesc(tx.description);
-    setTxCategory(tx.category);
+    
+    let cat = tx.category;
+    if (cat.endsWith('|recurring')) {
+      setTxIsRecurring(true);
+      cat = cat.replace('|recurring', '');
+    } else {
+      setTxIsRecurring(false);
+    }
+
+    if (!cat.includes('|')) {
+      const lower = cat.toLowerCase();
+      if (lower === 'empresa') cat = `${cat}|#E8A0BF`;
+      else if (lower === 'sobrevivência') cat = `${cat}|#A3D9B1`;
+      else if (lower === 'lazer') cat = `${cat}|#D9B873`;
+      else cat = `${cat}|#9CA3AF`;
+    }
+    setTxCategory(cat);
+    
     setTxDate(tx.date);
     setIsTxModalOpen(true);
     setOpenTxMenuId(null);
+    setIsCreatingTag(false);
   };
 
   const handleDeleteTx = async (id: string) => {
-    if (!window.confirm('Tem certeza que deseja excluir esta transação?')) return;
-    
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-      
-      const { error } = await supabase.from('financial_transactions').delete().eq('id', id);
-      if (error) throw error;
-      setTransactions(transactions.filter(t => t.id !== id));
-      setOpenTxMenuId(null);
-    } catch (error) {
-      console.error('Error deleting transaction:', error);
-    }
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Excluir Transação',
+      message: 'Tem certeza que deseja excluir esta transação?',
+      onConfirm: async () => {
+        try {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (!user) return;
+          
+          const { error } = await supabase.from('financial_transactions').delete().eq('id', id);
+          if (error) throw error;
+          setTransactions(prev => prev.filter(t => t.id !== id));
+          setOpenTxMenuId(null);
+          setConfirmDialog(null);
+        } catch (error) {
+          console.error('Error deleting transaction:', error);
+        }
+      }
+    });
   };
 
   const handleAddAsset = async (e: React.FormEvent) => {
@@ -315,19 +609,25 @@ export default function Finances() {
   };
 
   const handleDeleteAsset = async (id: string) => {
-    if (!window.confirm('Tem certeza que deseja excluir este ativo?')) return;
-    
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Excluir Ativo',
+      message: 'Tem certeza que deseja excluir este ativo?',
+      onConfirm: async () => {
+        try {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (!user) return;
 
-      const { error } = await supabase.from('financial_assets').delete().eq('id', id);
-      if (error) throw error;
-      setAssets(assets.filter(a => a.id !== id));
-      setOpenAssetMenuId(null);
-    } catch (error) {
-      console.error('Error deleting asset:', error);
-    }
+          const { error } = await supabase.from('financial_assets').delete().eq('id', id);
+          if (error) throw error;
+          setAssets(assets.filter(a => a.id !== id));
+          setOpenAssetMenuId(null);
+          setConfirmDialog(null);
+        } catch (error) {
+          console.error('Error deleting asset:', error);
+        }
+      }
+    });
   };
 
   const handleAddTreasure = async (e: React.FormEvent) => {
@@ -369,17 +669,24 @@ export default function Finances() {
   };
 
   const handleDeleteTreasure = async (id: string) => {
-    if (!window.confirm('Tem certeza que deseja excluir este tesouro?')) return;
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Excluir Tesouro',
+      message: 'Tem certeza que deseja excluir este tesouro?',
+      onConfirm: async () => {
+        try {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (!user) return;
 
-      const { error } = await supabase.from('financial_treasures').delete().eq('id', id);
-      if (error) throw error;
-      setTreasures(treasures.filter(t => t.id !== id));
-    } catch (error) {
-      console.error('Error deleting treasure:', error);
-    }
+          const { error } = await supabase.from('financial_treasures').delete().eq('id', id);
+          if (error) throw error;
+          setTreasures(treasures.filter(t => t.id !== id));
+          setConfirmDialog(null);
+        } catch (error) {
+          console.error('Error deleting treasure:', error);
+        }
+      }
+    });
   };
 
   // --- Calculations ---
@@ -425,6 +732,293 @@ export default function Finances() {
     { month: 'Fev', total: 51800 },
     { month: 'Mar', total: totalPatrimony },
   ];
+
+  const handleSync = async () => {
+    setIsSyncingAsaas(true);
+    setSyncMessage(null);
+    try {
+      const res = await fetch('/api/asaas/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId })
+      });
+      const data = await res.json();
+      if (data.error) {
+        setSyncMessage({ type: 'error', text: data.error });
+      } else if (data.count === 0) {
+        setSyncMessage({ type: 'info', text: data.message || 'Nenhuma nova venda importada. As vendas podem já ter sido sincronizadas ou não há cobranças confirmadas.' });
+      } else {
+        setSyncMessage({ type: 'success', text: `Sincronização concluída! ${data.count} novas vendas importadas.` });
+        fetchData(); // refresh transactions
+      }
+    } catch (e) {
+      setSyncMessage({ type: 'error', text: 'Erro ao sincronizar com o Asaas.' });
+    } finally {
+      setIsSyncingAsaas(false);
+      setTimeout(() => setSyncMessage(null), 5000);
+    }
+  };
+
+  const renderSales = () => {
+    const webhookUrl = userId ? `${window.location.origin}/api/webhook/asaas/${userId}` : 'Carregando...';
+
+    const asaasTxs = transactions.filter(t => t.description.includes('[Asaas]'));
+    const totalSales = asaasTxs.reduce((acc, curr) => acc + curr.amount, 0);
+    const salesCount = asaasTxs.length;
+    const averageTicket = salesCount > 0 ? totalSales / salesCount : 0;
+
+    // Group by Product
+    const productDataMap = new Map<string, number>();
+    asaasTxs.forEach(tx => {
+      // Try to clean up the description to group similar products (e.g., remove "Parcela X de Y. ")
+      let product = 'Outros';
+      const productMatch = tx.description.match(/\[Asaas\] (.*?)(?:\s*\(ID:|$)/);
+      if (productMatch) {
+        product = productMatch[1].trim();
+        // Remove "Parcela X de Y. " prefix if it exists to group recurring payments better
+        product = product.replace(/^Parcela \d+ de \d+\.\s*/i, '');
+      }
+      productDataMap.set(product, (productDataMap.get(product) || 0) + tx.amount);
+    });
+    
+    let productData = Array.from(productDataMap.entries())
+      .map(([name, value]) => {
+        // Truncate very long product names
+        const shortName = name.length > 40 ? name.substring(0, 40) + '...' : name;
+        return { name: shortName, value };
+      })
+      .sort((a, b) => b.value - a.value);
+
+    // Limit to top 5, group rest into "Outros"
+    if (productData.length > 5) {
+      const top5 = productData.slice(0, 5);
+      const othersValue = productData.slice(5).reduce((sum, item) => sum + item.value, 0);
+      
+      // Check if "Outros" already exists in top 5
+      const existingOutrosIndex = top5.findIndex(p => p.name === 'Outros');
+      if (existingOutrosIndex >= 0) {
+        top5[existingOutrosIndex].value += othersValue;
+        productData = top5;
+      } else {
+        productData = [...top5, { name: 'Outros', value: othersValue }];
+      }
+    }
+
+    // Group by Month
+    const dateDataMap = new Map<string, number>();
+    asaasTxs.forEach(tx => {
+      const date = new Date(tx.date);
+      const monthYear = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      dateDataMap.set(monthYear, (dateDataMap.get(monthYear) || 0) + tx.amount);
+    });
+    const dateData = Array.from(dateDataMap.entries())
+      .map(([date, amount]) => ({ date, amount }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    const COLORS = ['#10B981', '#3B82F6', '#8B5CF6', '#F59E0B', '#EF4444', '#EC4899', '#14B8A6'];
+
+    return (
+      <div className="space-y-6 animate-in fade-in duration-500">
+        
+        {/* Top Metrics */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="bg-surface border border-border-subtle p-6 relative overflow-hidden group">
+            <div className="absolute inset-0 bg-success/5 translate-y-[100%] group-hover:translate-y-0 transition-transform duration-500"></div>
+            <div className="relative z-10">
+              <div className="text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] mb-2 flex items-center gap-2">
+                <DollarSign className="w-3 h-3 text-success" />
+                Receita Total (Asaas)
+              </div>
+              <div className="text-3xl font-black text-success">R$ {totalSales.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+            </div>
+          </div>
+          <div className="bg-surface border border-border-subtle p-6 relative overflow-hidden group">
+            <div className="absolute inset-0 bg-white/5 translate-y-[100%] group-hover:translate-y-0 transition-transform duration-500"></div>
+            <div className="relative z-10">
+              <div className="text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] mb-2 flex items-center gap-2">
+                <Activity className="w-3 h-3 text-white" />
+                Vendas Realizadas
+              </div>
+              <div className="text-3xl font-black text-white">{salesCount}</div>
+            </div>
+          </div>
+          <div className="bg-surface border border-border-subtle p-6 relative overflow-hidden group">
+            <div className="absolute inset-0 bg-accent/5 translate-y-[100%] group-hover:translate-y-0 transition-transform duration-500"></div>
+            <div className="relative z-10">
+              <div className="text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] mb-2 flex items-center gap-2">
+                <Target className="w-3 h-3 text-accent" />
+                Ticket Médio
+              </div>
+              <div className="text-3xl font-black text-accent">R$ {averageTicket.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Charts */}
+        {asaasTxs.length > 0 && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="bg-surface border border-border-subtle p-6">
+              <h3 className="text-xs font-bold uppercase tracking-[0.1em] text-text-muted mb-6">Receita por Produto</h3>
+              <div className="h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={productData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={60}
+                      outerRadius={80}
+                      paddingAngle={5}
+                      dataKey="value"
+                    >
+                      {productData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip 
+                      formatter={(value: number) => `R$ ${value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`}
+                      contentStyle={{ backgroundColor: '#0A0A0A', borderColor: '#333', borderRadius: '0px' }}
+                      itemStyle={{ color: '#fff', fontSize: '12px', fontFamily: 'monospace' }}
+                    />
+                    <Legend wrapperStyle={{ fontSize: '10px', fontFamily: 'monospace' }} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            <div className="bg-surface border border-border-subtle p-6">
+              <h3 className="text-xs font-bold uppercase tracking-[0.1em] text-text-muted mb-6">Evolução da Receita</h3>
+              <div className="h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={dateData}>
+                    <defs>
+                      <linearGradient id="colorAmount" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#10B981" stopOpacity={0.3}/>
+                        <stop offset="95%" stopColor="#10B981" stopOpacity={0}/>
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
+                    <XAxis dataKey="date" stroke="#666" fontSize={10} tickMargin={10} />
+                    <YAxis stroke="#666" fontSize={10} tickFormatter={(value) => `R$${value}`} width={60} />
+                    <Tooltip 
+                      formatter={(value: number) => `R$ ${value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`}
+                      contentStyle={{ backgroundColor: '#0A0A0A', borderColor: '#333', borderRadius: '0px' }}
+                      labelStyle={{ color: '#888', fontSize: '10px', fontFamily: 'monospace', marginBottom: '4px' }}
+                      itemStyle={{ color: '#10B981', fontSize: '12px', fontFamily: 'monospace' }}
+                    />
+                    <Area type="monotone" dataKey="amount" stroke="#10B981" strokeWidth={2} fillOpacity={1} fill="url(#colorAmount)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Bottom Section: Latest Sales & Charts */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-1">
+            <div className="bg-surface border border-border-subtle overflow-hidden h-full">
+              <div className="p-4 border-b border-border-subtle bg-surface-2/50">
+                <h3 className="text-xs font-bold uppercase tracking-[0.1em] text-text-muted">Últimas Vendas</h3>
+              </div>
+              {asaasTxs.length === 0 ? (
+                <div className="p-8 text-center text-sm font-mono text-text-muted">
+                  Nenhuma venda registrada ainda.
+                </div>
+              ) : (
+                <div className="divide-y divide-border-subtle max-h-[500px] overflow-y-auto">
+                  {asaasTxs.slice(0, 15).map(tx => {
+                    // Clean up description
+                    let cleanDesc = tx.description.replace('[Asaas] ', '').replace(/\(ID: .*\)/, '').trim();
+                    cleanDesc = cleanDesc.replace(/^Parcela \d+ de \d+\.\s*/i, '');
+                    
+                    return (
+                      <div key={tx.id} className="p-4 flex items-center justify-between hover:bg-surface-2/30 transition-colors">
+                        <div className="flex items-center gap-4 min-w-0">
+                          <div className="w-10 h-10 rounded-full bg-success/10 flex items-center justify-center border border-success/20 shrink-0">
+                            <DollarSign className="w-4 h-4 text-success" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-sm font-bold text-white truncate" title={cleanDesc}>
+                              {cleanDesc}
+                            </div>
+                            <div className="text-[10px] font-mono text-text-muted">{new Date(tx.date).toLocaleDateString('pt-BR')}</div>
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0 ml-4">
+                          <div className="text-sm font-mono font-bold text-success">
+                            + R$ {Math.abs(tx.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          </div>
+                          <div className="text-[10px] uppercase tracking-[0.1em] text-text-muted">Concluído</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+          
+          <div className="lg:col-span-2 space-y-6">
+            <div className="bg-surface border border-border-subtle p-6">
+              <h3 className="text-xs font-bold uppercase tracking-[0.1em] text-text-muted mb-6">Receita por Produto</h3>
+              <div className="h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={productData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={60}
+                      outerRadius={80}
+                      paddingAngle={5}
+                      dataKey="value"
+                    >
+                      {productData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip 
+                      formatter={(value: number) => `R$ ${value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`}
+                      contentStyle={{ backgroundColor: '#0A0A0A', borderColor: '#333', borderRadius: '0px' }}
+                      itemStyle={{ color: '#fff', fontSize: '12px', fontFamily: 'monospace' }}
+                    />
+                    <Legend wrapperStyle={{ fontSize: '10px', fontFamily: 'monospace' }} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            <div className="bg-surface border border-border-subtle p-6">
+              <h3 className="text-xs font-bold uppercase tracking-[0.1em] text-text-muted mb-6">Evolução da Receita</h3>
+              <div className="h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={dateData}>
+                    <defs>
+                      <linearGradient id="colorAmount" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#10B981" stopOpacity={0.3}/>
+                        <stop offset="95%" stopColor="#10B981" stopOpacity={0}/>
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
+                    <XAxis dataKey="date" stroke="#666" fontSize={10} tickMargin={10} />
+                    <YAxis stroke="#666" fontSize={10} tickFormatter={(value) => `R$${value}`} width={60} />
+                    <Tooltip 
+                      formatter={(value: number) => `R$ ${value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`}
+                      contentStyle={{ backgroundColor: '#0A0A0A', borderColor: '#333', borderRadius: '0px' }}
+                      labelStyle={{ color: '#888', fontSize: '10px', fontFamily: 'monospace', marginBottom: '4px' }}
+                      itemStyle={{ color: '#10B981', fontSize: '12px', fontFamily: 'monospace' }}
+                    />
+                    <Area type="monotone" dataKey="amount" stroke="#10B981" strokeWidth={2} fillOpacity={1} fill="url(#colorAmount)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   const renderOverview = () => (
     <div className="space-y-6 animate-in fade-in duration-500">
@@ -553,125 +1147,218 @@ export default function Finances() {
     </div>
   );
 
-  const renderTransactions = () => (
-    <div className="space-y-6 animate-in fade-in duration-500">
-      <div className="flex justify-between items-end mb-6">
-        <div>
-          <h2 className="text-xl font-extrabold tracking-[-0.3px] uppercase">Fluxo de Caixa</h2>
-          <p className="text-xs font-mono text-text-muted mt-1">Histórico de receitas e despesas</p>
-        </div>
-        <button 
-          onClick={() => {
-            setEditingTxId(null);
-            setTxAmount('');
-            setTxDesc('');
-            setTxCategory('Outros');
-            setTxDate(new Date().toISOString().split('T')[0]);
-            setIsTxModalOpen(true);
-          }} 
-          className="btn-primary !bg-accent hover:!bg-accent/80 !text-black flex items-center gap-2"
-        >
-          <Plus className="w-4 h-4" />
-          NOVA TRANSAÇÃO
-        </button>
-      </div>
+  const renderTransactions = () => {
+    const groupedTransactions = transactions
+      .reduce((acc, curr) => {
+        // Parse date properly to avoid timezone issues
+        const [year, month, day] = curr.date.split('-');
+        const d = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+        
+        let monthYear = d.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+        monthYear = monthYear.charAt(0).toUpperCase() + monthYear.slice(1);
+        
+        if (!acc[monthYear]) {
+          acc[monthYear] = { incomes: [], expenses: [] };
+        }
+        
+        if (curr.type === 'income') {
+          acc[monthYear].incomes.push(curr);
+        } else {
+          acc[monthYear].expenses.push(curr);
+        }
+        
+        return acc;
+      }, {} as Record<string, { incomes: Transaction[], expenses: Transaction[] }>);
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 bg-surface-2 border border-border-subtle">
-          <div className="flex border-b border-border-subtle bg-surface-3/50 p-4">
-            <div className="w-1/2 text-[10px] font-mono text-text-muted uppercase tracking-[0.1em]">Descrição / Categoria</div>
-            <div className="w-1/4 text-[10px] font-mono text-text-muted uppercase tracking-[0.1em]">Data</div>
-            <div className="w-1/4 text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] text-right">Valor</div>
+    const renderTxTable = (txs: Transaction[], title: string, type: 'income' | 'expense') => {
+      const total = txs.reduce((sum, t) => sum + Math.abs(t.amount), 0);
+      
+      return (
+        <div className="flex flex-col h-full">
+          <h4 className={`text-sm font-mono uppercase tracking-[0.1em] mb-4 ${type === 'income' ? 'text-success' : 'text-error'}`}>
+            {title}
+          </h4>
+          <div className="bg-surface-2 border border-border-subtle rounded-sm flex-1 flex flex-col">
+            {/* Header */}
+            <div className="grid grid-cols-12 gap-2 p-3 border-b border-border-subtle bg-surface-3/30 text-[10px] font-mono text-text-muted uppercase tracking-[0.05em]">
+              <div className="col-span-3">Data</div>
+              <div className="col-span-4">Origem</div>
+              <div className="col-span-2">Valor</div>
+              <div className="col-span-2">Categoria</div>
+              <div className="col-span-1 text-right">Ações</div>
+            </div>
+            
+            {/* Body */}
+            <div className="divide-y divide-border-subtle flex-1">
+              {txs.length === 0 ? (
+                <div className="p-8 text-center text-xs font-mono text-text-muted uppercase">Nenhuma transação</div>
+              ) : (
+                txs.map(t => (
+                  <div key={t.id} className="grid grid-cols-12 gap-2 p-3 items-center hover:bg-surface transition-colors group text-xs">
+                    <div className="col-span-3 text-text-muted font-mono truncate">
+                      {new Date(t.date + 'T12:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}
+                    </div>
+                    <div className="col-span-4 flex items-center gap-2 text-text-main truncate">
+                      <span className="truncate">{t.description}</span>
+                      {t.category.endsWith('|recurring') && (
+                        <span className="text-[9px] bg-accent/20 text-accent px-1 rounded-sm font-bold" title="Recorrente">R</span>
+                      )}
+                    </div>
+                    <div className="col-span-2 font-mono truncate">
+                      R${Math.abs(t.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </div>
+                    <div className="col-span-2 truncate">
+                      {(() => {
+                        let catName = t.category;
+                        let catColor = '#9CA3AF';
+                        if (t.category.includes('|')) {
+                          [catName, catColor] = t.category.split('|');
+                        } else {
+                          const lower = t.category.toLowerCase();
+                          if (lower === 'empresa') catColor = '#E8A0BF';
+                          else if (lower === 'sobrevivência') catColor = '#A3D9B1';
+                          else if (lower === 'lazer') catColor = '#D9B873';
+                        }
+                        return (
+                          <span 
+                            className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium truncate max-w-full"
+                            style={{ backgroundColor: `${catColor}30`, color: catColor }}
+                          >
+                            {catName}
+                          </span>
+                        );
+                      })()}
+                    </div>
+                    <div className="col-span-1 flex items-center justify-end relative">
+                      <button 
+                        onClick={() => setOpenTxMenuId(openTxMenuId === t.id ? null : t.id)} 
+                        className="text-text-muted hover:text-text-main p-1 rounded hover:bg-surface-3 transition-colors opacity-0 group-hover:opacity-100"
+                      >
+                        <MoreHorizontal className="w-3 h-3" />
+                      </button>
+                      
+                      {openTxMenuId === t.id && (
+                        <>
+                          <div className="fixed inset-0 z-10" onClick={() => setOpenTxMenuId(null)}></div>
+                          <div className="absolute right-6 top-0 w-28 bg-surface-2 border border-border-subtle shadow-xl z-20 py-1 rounded">
+                            <button onClick={() => { handleEditTx(t); setOpenTxMenuId(null); }} className="w-full text-left px-3 py-1.5 text-[10px] font-mono uppercase tracking-[0.1em] text-text-main hover:bg-surface-3 flex items-center gap-2">
+                              <Edit2 className="w-3 h-3" /> Editar
+                            </button>
+                            <button onClick={() => { handleDeleteTx(t.id); setOpenTxMenuId(null); }} className="w-full text-left px-3 py-1.5 text-[10px] font-mono uppercase tracking-[0.1em] text-error hover:bg-error/10 flex items-center gap-2">
+                              <Trash2 className="w-3 h-3" /> Excluir
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+            
+            {/* Footer / Total */}
+            <div className="p-3 border-t border-border-subtle bg-surface-3/10 flex justify-between items-center">
+              <span className="text-[10px] font-mono uppercase text-text-muted">Total {title}</span>
+              <span className={`font-mono text-sm font-bold ${type === 'income' ? 'text-success' : 'text-error'}`}>
+                R$ {total.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+            </div>
           </div>
-          <div className="divide-y divide-border-subtle max-h-[500px] overflow-y-auto">
-            {transactions.length === 0 ? (
-              <div className="p-8 text-center text-xs font-mono text-text-muted uppercase">Nenhuma transação registrada.</div>
-            ) : (
-              transactions.map(t => (
-                <div key={t.id} className="flex p-4 items-center hover:bg-surface transition-colors group">
-                  <div className="w-1/2 flex items-center gap-4">
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${t.type === 'income' ? 'bg-success/10 text-success' : 'bg-error/10 text-error'}`}>
-                      {t.type === 'income' ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownRight className="w-4 h-4" />}
-                    </div>
-                    <div>
-                      <div className="text-sm font-bold uppercase tracking-[0.04em] text-text-main group-hover:text-accent transition-colors">{t.description}</div>
-                      <div className="text-[10px] font-mono text-text-muted uppercase">{t.category}</div>
-                    </div>
+        </div>
+      );
+    };
+
+    return (
+      <div className="space-y-6 animate-in fade-in duration-500">
+        <div className="flex justify-between items-end mb-6">
+          <div>
+            <h2 className="text-xl font-extrabold tracking-[-0.3px] uppercase">Transações</h2>
+            <p className="text-xs font-mono text-text-muted mt-1">Gerencie suas entradas e saídas</p>
+          </div>
+          <div className="flex items-center gap-4">
+            <button 
+              onClick={() => {
+                setEditingTxId(null);
+                setTxAmount('');
+                setTxDesc('');
+                setTxCategory('Outros|#9CA3AF');
+                setTxIsRecurring(false);
+                setTxDate(new Date().toISOString().split('T')[0]);
+                setIsTxModalOpen(true);
+                setIsCreatingTag(false);
+              }} 
+              className="btn-primary !bg-accent hover:!bg-accent/80 !text-black flex items-center gap-2"
+            >
+              <Plus className="w-4 h-4" />
+              NOVA TRANSAÇÃO
+            </button>
+          </div>
+        </div>
+
+        {Object.keys(groupedTransactions).length === 0 ? (
+          <div className="p-12 text-center text-sm font-mono text-text-muted uppercase border border-border-subtle bg-surface-2">
+            Nenhuma transação encontrada.
+          </div>
+        ) : (
+          <div className="space-y-12">
+            {Object.entries(groupedTransactions).map(([monthYear, data]) => {
+              const totalIncome = data.incomes.reduce((sum, t) => sum + Math.abs(t.amount), 0);
+              const totalExpense = data.expenses.reduce((sum, t) => sum + Math.abs(t.amount), 0);
+              const netBalance = totalIncome - totalExpense;
+              
+              const isExpanded = expandedMonths[monthYear] !== false; // Default to true
+
+              return (
+                <div key={monthYear} className="space-y-6">
+                  <div 
+                    className="flex justify-between items-center border-b border-border-subtle pb-2 cursor-pointer hover:opacity-80 transition-opacity"
+                    onClick={() => setExpandedMonths(prev => ({ ...prev, [monthYear]: !isExpanded }))}
+                  >
+                    <h3 className="text-2xl font-bold tracking-tight text-text-main capitalize">{monthYear}</h3>
+                    <ChevronDown className={`w-6 h-6 text-text-muted transition-transform duration-300 ${isExpanded ? 'rotate-180' : ''}`} />
                   </div>
-                  <div className="w-1/4 text-xs font-mono text-text-muted">
-                    {new Date(t.date).toLocaleDateString('pt-BR', { timeZone: 'UTC' })}
-                  </div>
-                  <div className={`w-1/4 flex items-center justify-end gap-3 text-sm font-mono font-bold ${t.type === 'income' ? 'text-success' : 'text-error'} relative`}>
-                    {t.type === 'income' ? '+' : '-'} R$ {Math.abs(t.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                    <button 
-                      onClick={() => setOpenTxMenuId(openTxMenuId === t.id ? null : t.id)} 
-                      className="text-text-muted hover:text-text-main p-1 rounded hover:bg-surface-3 transition-colors"
-                    >
-                      <MoreHorizontal className="w-4 h-4" />
-                    </button>
-                    
-                    {openTxMenuId === t.id && (
-                      <>
-                        <div 
-                          className="fixed inset-0 z-10" 
-                          onClick={() => setOpenTxMenuId(null)}
-                        ></div>
-                        <div className="absolute right-8 top-8 w-32 bg-surface-2 border border-border-subtle shadow-xl z-20 py-1 rounded">
-                          <button 
-                            onClick={() => handleEditTx(t)}
-                            className="w-full text-left px-4 py-2 text-xs font-mono uppercase tracking-[0.1em] text-text-main hover:bg-surface-3 flex items-center gap-2 transition-colors"
-                          >
-                            <Edit2 className="w-3 h-3" />
-                            Editar
-                          </button>
-                          <button 
-                            onClick={() => handleDeleteTx(t.id)}
-                            className="w-full text-left px-4 py-2 text-xs font-mono uppercase tracking-[0.1em] text-error hover:bg-error/10 flex items-center gap-2 transition-colors"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                            Excluir
-                          </button>
+                  
+                  {isExpanded && (
+                    <div className="space-y-6 animate-in fade-in slide-in-from-top-4 duration-300">
+                      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                        {renderTxTable(data.incomes, 'Entradas', 'income')}
+                        {renderTxTable(data.expenses, 'Saídas', 'expense')}
+                      </div>
+                      
+                      {/* Resumo do Mês */}
+                      <div className="bg-surface-2 border border-border-subtle p-4 rounded-sm flex flex-col sm:flex-row justify-between items-center gap-4">
+                        <span className="text-xs font-mono uppercase text-text-muted tracking-[0.1em]">
+                          Resultado do Mês
+                        </span>
+                        <div className="flex items-center gap-4">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-mono text-text-muted uppercase">Entradas:</span>
+                            <span className="text-xs font-mono text-success">R$ {totalIncome.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                          </div>
+                          <span className="text-border-subtle">|</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-mono text-text-muted uppercase">Saídas:</span>
+                            <span className="text-xs font-mono text-error">R$ {totalExpense.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                          </div>
+                          <span className="text-border-subtle">|</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-mono text-text-muted uppercase">Saldo:</span>
+                            <span className={`text-lg font-mono font-bold ${netBalance >= 0 ? 'text-success' : 'text-error'}`}>
+                              {netBalance >= 0 ? '+' : ''}R$ {netBalance.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                          </div>
                         </div>
-                      </>
-                    )}
-                  </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              ))
-            )}
+              );
+            })}
           </div>
-        </div>
-
-        <div className="space-y-6">
-          <div className="bg-surface-2 border border-border-subtle p-6">
-            <div className="text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] mb-4">Maior Despesa (Mês)</div>
-            <div className="text-xl font-black tracking-[-1px] text-error mb-1">
-              {(() => {
-                const expenses = currentMonthTxs.filter(t => t.type === 'expense');
-                if (expenses.length === 0) return 'NENHUMA';
-                const max = expenses.reduce((prev, current) => (Math.abs(prev.amount) > Math.abs(current.amount)) ? prev : current);
-                return max.description;
-              })()}
-            </div>
-            <div className="text-sm font-mono text-text-muted">
-              {(() => {
-                const expenses = currentMonthTxs.filter(t => t.type === 'expense');
-                if (expenses.length === 0) return 'R$ 0,00';
-                const max = expenses.reduce((prev, current) => (Math.abs(prev.amount) > Math.abs(current.amount)) ? prev : current);
-                return `R$ ${Math.abs(max.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
-              })()}
-            </div>
-          </div>
-          <div className="bg-surface-2 border border-border-subtle p-6">
-            <div className="text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] mb-4">Média de Gastos Diários</div>
-            <div className="text-2xl font-black tracking-[-1px] text-text-main mb-1">
-              R$ {(monthExpense / new Date(currentYear, currentMonth + 1, 0).getDate()).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-            </div>
-            <div className="text-[10px] font-mono text-text-muted uppercase">Baseado em {new Date(currentYear, currentMonth + 1, 0).getDate()} dias</div>
-          </div>
-        </div>
+        )}
       </div>
-    </div>
-  );
+    );
+  };
 
   const [isUpdatingPrices, setIsUpdatingPrices] = useState(false);
 
@@ -1044,7 +1731,7 @@ export default function Finances() {
   return (
     <div className="space-y-8 pb-12 relative">
       {/* Hero Section */}
-      <section className="relative border-b border-border-subtle pb-8">
+      <section className="relative border-b border-border-subtle pb-8 flex flex-col md:flex-row justify-between items-start md:items-end gap-4">
         <div className="absolute inset-0 z-0 opacity-5 pointer-events-none" style={{
           backgroundImage: 'linear-gradient(rgba(255,255,255,1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,1) 1px, transparent 1px)',
           backgroundSize: '40px 40px'
@@ -1060,6 +1747,26 @@ export default function Finances() {
           <p className="text-[13px] text-text-muted max-w-lg leading-[1.7] font-mono border-l-2 border-accent pl-3">
             Gestão de fluxo de caixa, carteira de investimentos e metas financeiras gamificadas.
           </p>
+        </div>
+        
+        <div className="relative z-10 flex items-center gap-4">
+          {syncMessage && (
+            <div className={`text-xs px-3 py-1.5 rounded-sm font-medium ${
+              syncMessage.type === 'success' ? 'bg-success/20 text-success' : 
+              syncMessage.type === 'error' ? 'bg-danger/20 text-danger' : 
+              'bg-accent/20 text-accent'
+            }`}>
+              {syncMessage.text}
+            </div>
+          )}
+          <button 
+            onClick={handleSync}
+            disabled={isSyncingAsaas}
+            className="bg-surface-2 border border-border-subtle text-text-main px-4 py-2 text-xs font-bold uppercase tracking-[0.1em] hover:bg-surface-3 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Activity className={`w-4 h-4 ${isSyncingAsaas ? 'animate-spin' : ''}`} />
+            {isSyncingAsaas ? 'Sincronizando...' : 'Sincronizar Asaas'}
+          </button>
         </div>
       </section>
 
@@ -1093,6 +1800,32 @@ export default function Finances() {
 
       {/* --- MODALS --- */}
       
+      {/* Confirm Dialog Modal */}
+      {confirmDialog?.isOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[60] flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-surface w-full max-w-sm border border-border-subtle shadow-2xl animate-in zoom-in-95 duration-200">
+            <div className="p-6">
+              <h3 className="text-lg font-black tracking-[-1px] text-white mb-2">{confirmDialog.title}</h3>
+              <p className="text-sm font-mono text-text-muted mb-6">{confirmDialog.message}</p>
+              <div className="flex gap-3 justify-end">
+                <button 
+                  onClick={() => setConfirmDialog(null)}
+                  className="px-4 py-2 text-xs font-mono font-bold uppercase tracking-[0.1em] text-text-muted hover:text-white hover:bg-surface-3 transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={confirmDialog.onConfirm}
+                  className="px-4 py-2 text-xs font-mono font-bold uppercase tracking-[0.1em] text-black bg-error hover:bg-error/80 transition-colors"
+                >
+                  Confirmar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Modal Nova Transação */}
       {isTxModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg/80 backdrop-blur-sm p-4 animate-in fade-in">
@@ -1124,16 +1857,84 @@ export default function Finances() {
                 <input type="text" required value={txDesc} onChange={e => setTxDesc(e.target.value)} className="w-full bg-surface border border-border-subtle px-4 py-3 text-sm font-mono text-text-main focus:outline-none focus:border-accent transition-colors uppercase" placeholder="EX: ALMOÇO" />
               </div>
 
+              <div className="flex items-center gap-2 mt-2">
+                <input 
+                  type="checkbox" 
+                  id="txIsRecurring" 
+                  checked={txIsRecurring} 
+                  onChange={e => setTxIsRecurring(e.target.checked)} 
+                  className="w-4 h-4 bg-surface border border-border-subtle text-accent focus:ring-accent rounded-sm"
+                />
+                <label htmlFor="txIsRecurring" className="text-[10px] font-mono text-text-main uppercase tracking-[0.1em] cursor-pointer">
+                  Transação Recorrente (Mensal)
+                </label>
+              </div>
+
               <div>
-                <label className="block text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2">Categoria</label>
-                <select value={txCategory} onChange={e => setTxCategory(e.target.value)} className="w-full bg-surface border border-border-subtle px-4 py-3 text-sm font-mono text-text-main focus:outline-none focus:border-accent transition-colors uppercase">
-                  <option value="Salário">Salário</option>
-                  <option value="Moradia">Moradia</option>
-                  <option value="Alimentação">Alimentação</option>
-                  <option value="Transporte">Transporte</option>
-                  <option value="Investimentos">Investimentos</option>
-                  <option value="Outros">Outros</option>
-                </select>
+                <label className="block text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2">Categoria (Tag)</label>
+                {!isCreatingTag ? (
+                  <div className="flex gap-2">
+                    <select 
+                      value={txCategory} 
+                      onChange={e => {
+                        if (e.target.value === 'NEW') {
+                          setIsCreatingTag(true);
+                          setNewTagName('');
+                          setNewTagColor('#F97316');
+                        } else {
+                          setTxCategory(e.target.value);
+                        }
+                      }} 
+                      className="flex-1 bg-surface border border-border-subtle px-4 py-3 text-sm font-mono text-text-main focus:outline-none focus:border-accent transition-colors uppercase"
+                    >
+                      {existingTags.map(tag => (
+                        <option key={tag.name} value={`${tag.name}|${tag.color}`}>
+                          {tag.name}
+                        </option>
+                      ))}
+                      <option value="NEW">+ Criar nova tag...</option>
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => setIsManageTagsModalOpen(true)}
+                      className="px-3 py-3 bg-surface border border-border-subtle text-text-muted hover:text-accent hover:border-accent transition-colors flex items-center justify-center"
+                      title="Gerenciar Tags"
+                    >
+                      <Settings className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex gap-2 items-center bg-surface border border-border-subtle p-2">
+                    <input 
+                      type="color" 
+                      value={newTagColor} 
+                      onChange={e => setNewTagColor(e.target.value)}
+                      className="w-10 h-10 p-1 bg-transparent border-none cursor-pointer"
+                    />
+                    <input 
+                      type="text" 
+                      value={newTagName} 
+                      onChange={e => setNewTagName(e.target.value)}
+                      placeholder="NOME DA TAG"
+                      className="flex-1 bg-transparent border-none text-sm font-mono text-text-main focus:outline-none uppercase"
+                      autoFocus
+                    />
+                    <button 
+                      type="button"
+                      onClick={handleCreateTag}
+                      className="p-2 text-success hover:bg-success/10 rounded transition-colors"
+                    >
+                      <Check className="w-4 h-4" />
+                    </button>
+                    <button 
+                      type="button"
+                      onClick={() => setIsCreatingTag(false)}
+                      className="p-2 text-text-muted hover:text-error hover:bg-error/10 rounded transition-colors"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
               </div>
 
               <button type="submit" className={`w-full py-4 text-[11px] font-mono font-bold uppercase tracking-[0.1em] transition-colors ${txType === 'income' ? 'bg-success hover:bg-success/80 text-black' : 'bg-error hover:bg-error/80 text-black'}`}>
@@ -1226,6 +2027,85 @@ export default function Finances() {
                 CRIAR TESOURO
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Manage Tags Modal */}
+      {isManageTagsModalOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-surface w-full max-w-md border border-border-subtle shadow-2xl animate-in slide-in-from-bottom-4 duration-300">
+            <div className="flex items-center justify-between p-4 border-b border-border-subtle">
+              <div className="flex items-center gap-2 text-[11px] font-mono font-bold uppercase tracking-[0.1em] text-text-main">
+                <Settings className="w-4 h-4 text-accent" />
+                GERENCIAR TAGS
+              </div>
+              <button onClick={() => setIsManageTagsModalOpen(false)} className="text-text-muted hover:text-text-main transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 max-h-[60vh] overflow-y-auto space-y-2">
+              {existingTags.length === 0 ? (
+                <div className="text-center text-xs text-text-muted font-mono uppercase py-4">Nenhuma tag encontrada.</div>
+              ) : (
+                existingTags.map(tag => (
+                  <div key={tag.name} className="flex items-center justify-between p-3 border border-border-subtle bg-surface-2">
+                    {editingTag?.oldName === tag.name ? (
+                      <div className="flex items-center gap-2 flex-1">
+                        <input 
+                          type="color" 
+                          value={editingTag.color} 
+                          onChange={e => setEditingTag({ ...editingTag, color: e.target.value })}
+                          className="w-8 h-8 p-0.5 bg-transparent border-none cursor-pointer"
+                        />
+                        <input 
+                          type="text" 
+                          value={editingTag.name} 
+                          onChange={e => setEditingTag({ ...editingTag, name: e.target.value })}
+                          className="flex-1 bg-surface border border-border-subtle px-2 py-1 text-xs font-mono text-text-main focus:outline-none uppercase"
+                          autoFocus
+                        />
+                        <button 
+                          onClick={() => handleUpdateTag(tag.name, editingTag.name, editingTag.color)}
+                          className="p-1.5 text-success hover:bg-success/10 rounded transition-colors"
+                        >
+                          <Check className="w-4 h-4" />
+                        </button>
+                        <button 
+                          onClick={() => setEditingTag(null)}
+                          className="p-1.5 text-text-muted hover:text-error hover:bg-error/10 rounded transition-colors"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex items-center gap-2">
+                          <div className="w-3 h-3 rounded-full" style={{ backgroundColor: tag.color }}></div>
+                          <span className="text-sm font-mono text-text-main uppercase">{tag.name}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <button 
+                            onClick={() => setEditingTag({ oldName: tag.name, name: tag.name, color: tag.color })}
+                            className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded transition-colors"
+                            title="Editar Tag"
+                          >
+                            <Edit2 className="w-4 h-4" />
+                          </button>
+                          <button 
+                            onClick={() => handleDeleteTag(tag.name)}
+                            className="p-1.5 text-text-muted hover:text-error hover:bg-error/10 rounded transition-colors"
+                            title="Excluir Tag"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </div>
       )}

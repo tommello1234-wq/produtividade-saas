@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Clock, AlertCircle, CheckCircle2, Plus, GripVertical, Trash2, X, Save } from 'lucide-react';
+import { Clock, AlertCircle, CheckCircle2, Plus, GripVertical, Trash2, X, Save, User, Share2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+
 
 type Priority = 'low' | 'medium' | 'high';
 type Status = 'backlog' | 'doing' | 'done';
@@ -13,6 +14,8 @@ interface Task {
   deadline: string;
   status: Status;
   xp_reward: number;
+  tags?: string[];
+  responsible?: string;
 }
 
 export default function Trabalho() {
@@ -25,6 +28,8 @@ export default function Trabalho() {
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState<Priority>('medium');
   const [deadline, setDeadline] = useState('');
+  const [tagsInput, setTagsInput] = useState('');
+  const [responsible, setResponsible] = useState('');
 
   // Edit Modal state
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
@@ -34,9 +39,24 @@ export default function Trabalho() {
   const [editPriority, setEditPriority] = useState<Priority>('medium');
   const [editDeadline, setEditDeadline] = useState('');
   const [editXpReward, setEditXpReward] = useState(0);
+  const [editTagsInput, setEditTagsInput] = useState('');
+  const [editResponsible, setEditResponsible] = useState('');
+
+  // Create & Share Modals state
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [shareEmail, setShareEmail] = useState('');
+  const [shareRole, setShareRole] = useState<'viewer' | 'editor'>('viewer');
+
+  // Tag Filtering
+  const [selectedFilterTags, setSelectedFilterTags] = useState<string[]>([]);
 
   useEffect(() => {
     fetchTasks();
+    
+    const handleRefresh = () => fetchTasks();
+    window.addEventListener('app_data_changed', handleRefresh);
+    return () => window.removeEventListener('app_data_changed', handleRefresh);
   }, []);
 
   const openEditModal = (task: Task) => {
@@ -46,34 +66,29 @@ export default function Trabalho() {
     setEditPriority(task.priority);
     setEditDeadline(task.deadline || '');
     setEditXpReward(task.xp_reward);
+    setEditTagsInput(task.tags ? task.tags.join(', ') : '');
+    setEditResponsible(task.responsible || '');
     setIsEditModalOpen(true);
   };
 
   const handleSaveEdit = async () => {
     if (!selectedTask || !editTitle.trim()) return;
 
+    const tagsArray = editTagsInput.split(',').map(t => t.trim()).filter(t => t);
+
     const updatedTask = {
       title: editTitle,
       description: editDescription,
       priority: editPriority,
       deadline: editDeadline || null,
-      xp_reward: editXpReward
+      xp_reward: editXpReward,
+      tags: tagsArray.length > 0 ? tagsArray : null,
+      responsible: editResponsible || null
     };
 
     try {
-      // Optimistic update
-      setTasks(tasks.map(t => t.id === selectedTask.id ? { ...t, ...updatedTask } : t));
+      await updateTask(selectedTask.id, updatedTask);
       setIsEditModalOpen(false);
-
-      const { error } = await supabase
-        .from('work_tasks')
-        .update(updatedTask)
-        .eq('id', selectedTask.id);
-
-      if (error) {
-        fetchTasks();
-        throw error;
-      }
     } catch (error) {
       console.error('Error updating task:', error);
     }
@@ -120,49 +135,76 @@ export default function Trabalho() {
       return;
     }
 
-    // Optimistic update
-    setTasks(prev => prev.map(task => {
-      if (task.id === draggedTaskId) {
-        return { ...task, status: newStatus };
-      }
-      return task;
-    }));
-
     try {
-      const { error } = await supabase
-        .from('work_tasks')
-        .update({ status: newStatus })
-        .eq('id', draggedTaskId);
-
-      if (error) throw error;
-
-      // Se moveu para 'done', atualiza XP do usuário
-      if (newStatus === 'done') {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
-          // Busca perfil atual
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('total_xp')
-            .eq('id', user.id)
-            .single();
-            
-          if (profile) {
-            // Atualiza XP
-            await supabase
-              .from('profiles')
-              .update({ total_xp: profile.total_xp + taskToUpdate.xp_reward })
-              .eq('id', user.id);
-          }
-        }
-      }
+      await updateTask(draggedTaskId, { status: newStatus });
     } catch (error) {
       console.error('Error updating task status:', error);
-      // Revert optimistic update on error
-      fetchTasks();
     } finally {
       setDraggedTaskId(null);
     }
+  };
+
+  const addTask = async (taskData: Omit<Task, 'id' | 'created_at' | 'user_id'>) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('User not authenticated');
+
+    const newTask = {
+      user_id: user.id,
+      ...taskData
+    };
+
+    const { data, error } = await supabase
+      .from('work_tasks')
+      .insert([newTask])
+      .select()
+      .single();
+
+    if (error) throw error;
+    setTasks(prev => [data, ...prev]);
+  };
+
+  const updateTask = async (id: string, updates: Partial<Task>) => {
+    const taskToUpdate = tasks.find(t => t.id === id);
+    if (!taskToUpdate) return;
+
+    setTasks(prev => prev.map(t => t.id === id ? { ...t, ...updates } as Task : t));
+    const { error } = await supabase
+      .from('work_tasks')
+      .update(updates)
+      .eq('id', id);
+
+    if (error) {
+      fetchTasks();
+      throw error;
+    }
+
+    if (updates.status === 'done' && taskToUpdate.status !== 'done') {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('total_xp')
+          .eq('id', user.id)
+          .single();
+          
+        if (profile) {
+          await supabase
+            .from('profiles')
+            .update({ total_xp: profile.total_xp + taskToUpdate.xp_reward })
+            .eq('id', user.id);
+        }
+      }
+    }
+  };
+
+  const deleteTask = async (id: string) => {
+    const { error } = await supabase
+      .from('work_tasks')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
+    setTasks(prev => prev.filter(t => t.id !== id));
   };
 
   const handleAddTask = async (e: React.FormEvent) => {
@@ -170,50 +212,37 @@ export default function Trabalho() {
     if (!title.trim()) return;
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
       const xp_reward = priority === 'high' ? 30 : priority === 'medium' ? 20 : 10;
+      const tagsArray = tagsInput.split(',').map(t => t.trim()).filter(t => t);
 
-      const newTask = {
-        user_id: user.id,
+      await addTask({
         title,
         description,
         priority,
         deadline: deadline || null,
         status: 'backlog',
-        xp_reward
-      };
+        xp_reward,
+        tags: tagsArray.length > 0 ? tagsArray : null,
+        responsible: responsible || null
+      });
 
-      const { data, error } = await supabase
-        .from('work_tasks')
-        .insert([newTask])
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      setTasks([data, ...tasks]);
       setTitle('');
       setDescription('');
       setPriority('medium');
       setDeadline('');
-    } catch (error) {
+      setTagsInput('');
+      setResponsible('');
+      setIsCreateModalOpen(false);
+    } catch (error: any) {
       console.error('Error adding task:', error);
-      alert('Erro ao adicionar tarefa.');
+      alert(`Erro ao adicionar tarefa. Detalhes: ${error.message}`);
     }
   };
 
   const handleDeleteTask = async (id: string) => {
     if (!window.confirm('Tem certeza que deseja excluir esta tarefa?')) return;
     try {
-      const { error } = await supabase
-        .from('work_tasks')
-        .delete()
-        .eq('id', id);
-
-      if (error) throw error;
-      setTasks(tasks.filter(t => t.id !== id));
+      await deleteTask(id);
     } catch (error) {
       console.error('Error deleting task:', error);
     }
@@ -225,6 +254,46 @@ export default function Trabalho() {
     return 'text-success border-success/30 bg-success/10';
   };
 
+  // Derived state for tags
+  const allAvailableTags = Array.from(new Set(tasks.flatMap(t => t.tags || []))).sort();
+
+  const filteredTasks = tasks.filter(task => {
+    if (selectedFilterTags.length === 0) return true;
+    if (!task.tags) return false;
+    return selectedFilterTags.every(tag => task.tags!.includes(tag));
+  });
+
+  const getTagColor = (tag: string) => {
+    const colors = [
+      'bg-blue-500/10 text-blue-500 border-blue-500/20',
+      'bg-emerald-500/10 text-emerald-500 border-emerald-500/20',
+      'bg-purple-500/10 text-purple-500 border-purple-500/20',
+      'bg-amber-500/10 text-amber-500 border-amber-500/20',
+      'bg-pink-500/10 text-pink-500 border-pink-500/20',
+      'bg-cyan-500/10 text-cyan-500 border-cyan-500/20',
+      'bg-rose-500/10 text-rose-500 border-rose-500/20',
+      'bg-indigo-500/10 text-indigo-500 border-indigo-500/20',
+    ];
+    let hash = 0;
+    for (let i = 0; i < tag.length; i++) {
+      hash = tag.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    return colors[Math.abs(hash) % colors.length];
+  };
+
+  const toggleFilterTag = (tag: string) => {
+    setSelectedFilterTags(prev => 
+      prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]
+    );
+  };
+
+  const handleAddTagToInput = (tag: string, currentInput: string, setter: (val: string) => void) => {
+    const currentTags = currentInput.split(',').map(t => t.trim()).filter(t => t);
+    if (!currentTags.includes(tag)) {
+      setter(currentTags.length > 0 ? `${currentInput}, ${tag}` : tag);
+    }
+  };
+
   const getPriorityLabel = (p: Priority) => {
     if (p === 'high') return 'ALTA';
     if (p === 'medium') return 'MÉDIA';
@@ -232,7 +301,7 @@ export default function Trabalho() {
   };
 
   const renderColumn = (status: Status, columnTitle: string, colorClass: string) => {
-    const columnTasks = tasks.filter(t => t.status === status);
+    const columnTasks = filteredTasks.filter(t => t.status === status);
 
     return (
       <div 
@@ -283,10 +352,27 @@ export default function Trabalho() {
                 <p className="text-xs text-text-muted font-mono mb-3 pl-2 line-clamp-2">{task.description}</p>
               )}
               
+              {task.tags && task.tags.length > 0 && (
+                <div className="flex flex-wrap gap-1 mb-3 pl-2">
+                  {task.tags.map((tag, idx) => (
+                    <span key={idx} className={`text-[9px] font-mono border px-1.5 py-0.5 uppercase ${getTagColor(tag)}`}>
+                      #{tag}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {task.responsible && (
+                <div className="flex items-center gap-1.5 text-[10px] font-mono text-info mb-3 pl-2">
+                  <User className="w-3 h-3" />
+                  <span className="uppercase">{task.responsible}</span>
+                </div>
+              )}
+              
               {task.deadline && (
                 <div className="flex items-center gap-1.5 text-[10px] font-mono text-text-muted mt-3 pl-2 pt-3 border-t border-border-subtle/50">
                   <Clock className="w-3 h-3" />
-                  <span>DEADLINE: {new Date(task.deadline).toLocaleDateString('pt-BR')}</span>
+                  <span>DEADLINE: {task.deadline.split('-').reverse().join('/')}</span>
                 </div>
               )}
             </div>
@@ -333,9 +419,53 @@ export default function Trabalho() {
       
       {/* Secao 01 - Kanban */}
       <section id="secao-01">
-        <div className="flex items-baseline gap-4 mb-6">
-          <span className="text-[11px] font-bold text-error tracking-[0.1em] font-mono border border-error/30 px-2 py-0.5">01</span>
-          <h2 className="text-xl font-extrabold tracking-[-0.3px] uppercase">Kanban Board</h2>
+        <div className="flex flex-col gap-4 mb-6">
+          <div className="flex items-center justify-between">
+            <div className="flex items-baseline gap-4">
+              <span className="text-[11px] font-bold text-error tracking-[0.1em] font-mono border border-error/30 px-2 py-0.5">01</span>
+              <h2 className="text-xl font-extrabold tracking-[-0.3px] uppercase">Kanban Board</h2>
+            </div>
+            <div className="flex items-center gap-3">
+              <button onClick={() => setIsShareModalOpen(true)} className="btn-secondary flex items-center gap-2 text-xs py-2 px-4">
+                <Share2 className="w-4 h-4" />
+                COMPARTILHAR
+              </button>
+              <button onClick={() => setIsCreateModalOpen(true)} className="btn-primary !bg-error hover:!bg-error/80 !text-black flex items-center gap-2 text-xs py-2 px-4">
+                <Plus className="w-4 h-4" />
+                NOVA TAREFA
+              </button>
+            </div>
+          </div>
+          
+          {allAvailableTags.length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap bg-surface-2 border border-border-subtle p-3">
+              <span className="text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] mr-2">Filtrar por Tags:</span>
+              {allAvailableTags.map(tag => {
+                const isSelected = selectedFilterTags.includes(tag);
+                return (
+                  <button
+                    key={tag}
+                    onClick={() => toggleFilterTag(tag)}
+                    className={`text-[10px] font-mono border px-2 py-1 uppercase transition-colors ${
+                      isSelected 
+                        ? getTagColor(tag) 
+                        : 'bg-surface border-border-subtle text-text-muted hover:border-text-muted'
+                    }`}
+                  >
+                    #{tag}
+                  </button>
+                );
+              })}
+              {selectedFilterTags.length > 0 && (
+                <button 
+                  onClick={() => setSelectedFilterTags([])}
+                  className="text-[10px] font-mono text-error hover:underline ml-2 uppercase"
+                >
+                  Limpar Filtros
+                </button>
+              )}
+            </div>
+          )}
         </div>
         
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -345,86 +475,10 @@ export default function Trabalho() {
         </div>
       </section>
 
-      {/* Secao 02 - Nova Tarefa */}
+      {/* Secao 02 - Estatisticas */}
       <section id="secao-02">
         <div className="flex items-baseline gap-4 mb-6">
           <span className="text-[11px] font-bold text-error tracking-[0.1em] font-mono border border-error/30 px-2 py-0.5">02</span>
-          <h2 className="text-xl font-extrabold tracking-[-0.3px] uppercase">Nova Tarefa</h2>
-        </div>
-
-        <form onSubmit={handleAddTask} className="bg-surface-2 border border-border-subtle p-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-            <div className="space-y-4">
-              <div>
-                <label className="block text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2">Título da Tarefa *</label>
-                <input 
-                  type="text" 
-                  required
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  className="w-full bg-surface border border-border-subtle px-4 py-3 text-sm font-mono text-text-main focus:outline-none focus:border-error transition-colors placeholder:text-text-muted/50 uppercase" 
-                  placeholder="EX: REVISAR CONTRATO" 
-                />
-              </div>
-              <div>
-                <label className="block text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2">Descrição (Opcional)</label>
-                <textarea 
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  className="w-full bg-surface border border-border-subtle px-4 py-3 text-sm font-mono text-text-main focus:outline-none focus:border-error transition-colors placeholder:text-text-muted/50 resize-none h-24" 
-                  placeholder="Detalhes da missão..." 
-                />
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2">Prioridade</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['low', 'medium', 'high'] as Priority[]).map(p => (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => setPriority(p)}
-                      className={`py-3 text-[10px] font-mono uppercase tracking-[0.1em] border transition-colors ${
-                        priority === p 
-                          ? getPriorityColor(p) 
-                          : 'bg-surface border-border-subtle text-text-muted hover:border-text-muted'
-                      }`}
-                    >
-                      {getPriorityLabel(p)}
-                      <span className="block text-[8px] opacity-70 mt-1">
-                        +{p === 'high' ? 30 : p === 'medium' ? 20 : 10} XP
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <label className="block text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2">Deadline (Opcional)</label>
-                <input 
-                  type="date" 
-                  value={deadline}
-                  onChange={(e) => setDeadline(e.target.value)}
-                  className="w-full bg-surface border border-border-subtle px-4 py-3 text-sm font-mono text-text-main focus:outline-none focus:border-error transition-colors uppercase" 
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="flex justify-end border-t border-border-subtle pt-6">
-            <button type="submit" className="btn-primary !bg-error hover:!bg-error/80 !text-black flex items-center gap-2">
-              <Plus className="w-4 h-4" />
-              CRIAR TAREFA
-            </button>
-          </div>
-        </form>
-      </section>
-
-      {/* Secao 03 - Estatisticas */}
-      <section id="secao-03">
-        <div className="flex items-baseline gap-4 mb-6">
-          <span className="text-[11px] font-bold text-error tracking-[0.1em] font-mono border border-error/30 px-2 py-0.5">03</span>
           <h2 className="text-xl font-extrabold tracking-[-0.3px] uppercase">Estatísticas</h2>
         </div>
 
@@ -495,6 +549,44 @@ export default function Trabalho() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
+                  <label className="block text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2">Responsável</label>
+                  <input 
+                    type="text" 
+                    value={editResponsible} 
+                    onChange={(e) => setEditResponsible(e.target.value)} 
+                    className="w-full bg-surface border border-border-subtle px-4 py-3 text-sm font-mono text-text-main focus:outline-none focus:border-error transition-colors uppercase" 
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2">Tags (Separadas por vírgula)</label>
+                  <input 
+                    type="text" 
+                    value={editTagsInput} 
+                    onChange={(e) => setEditTagsInput(e.target.value)} 
+                    className="w-full bg-surface border border-border-subtle px-4 py-3 text-sm font-mono text-text-main focus:outline-none focus:border-error transition-colors uppercase" 
+                  />
+                  {allAvailableTags.length > 0 && (
+                    <div className="mt-3">
+                      <span className="block text-[9px] font-mono text-text-muted uppercase mb-1.5">Tags Existentes (Clique para adicionar):</span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {allAvailableTags.map(tag => (
+                          <button
+                            key={tag}
+                            type="button"
+                            onClick={() => handleAddTagToInput(tag, editTagsInput, setEditTagsInput)}
+                            className={`text-[9px] font-mono border px-1.5 py-0.5 uppercase transition-opacity hover:opacity-80 ${getTagColor(tag)}`}
+                          >
+                            #{tag}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
                   <label className="block text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2">Prioridade</label>
                   <div className="grid grid-cols-3 gap-2">
                     {(['low', 'medium', 'high'] as Priority[]).map(p => (
@@ -548,6 +640,207 @@ export default function Trabalho() {
           </div>
         </div>
       )}
+      {/* Modal de Criação */}
+      {isCreateModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" onClick={() => setIsCreateModalOpen(false)}>
+          <div className="bg-surface-2 border border-border-subtle w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-6 border-b border-border-subtle sticky top-0 bg-surface-2 z-10">
+              <div className="flex items-center gap-3">
+                <div className="w-2 h-2 rounded-full bg-error animate-pulse"></div>
+                <h2 className="text-xl font-extrabold tracking-[-0.3px] uppercase">Nova Tarefa</h2>
+              </div>
+              <button onClick={() => setIsCreateModalOpen(false)} className="text-text-muted hover:text-error transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddTask} className="p-6 space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2">Título da Tarefa *</label>
+                    <input 
+                      type="text" 
+                      required
+                      value={title}
+                      onChange={(e) => setTitle(e.target.value)}
+                      className="w-full bg-surface border border-border-subtle px-4 py-3 text-sm font-mono text-text-main focus:outline-none focus:border-error transition-colors placeholder:text-text-muted/50 uppercase" 
+                      placeholder="EX: REVISAR CONTRATO" 
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2">Descrição (Opcional)</label>
+                    <textarea 
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                      className="w-full bg-surface border border-border-subtle px-4 py-3 text-sm font-mono text-text-main focus:outline-none focus:border-error transition-colors placeholder:text-text-muted/50 resize-none h-24" 
+                      placeholder="Detalhes da missão..." 
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2">Responsável (Opcional)</label>
+                    <input 
+                      type="text" 
+                      value={responsible}
+                      onChange={(e) => setResponsible(e.target.value)}
+                      className="w-full bg-surface border border-border-subtle px-4 py-3 text-sm font-mono text-text-main focus:outline-none focus:border-error transition-colors placeholder:text-text-muted/50 uppercase" 
+                      placeholder="NOME DO RESPONSÁVEL" 
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2">Tags (Separadas por vírgula)</label>
+                    <input 
+                      type="text" 
+                      value={tagsInput}
+                      onChange={(e) => setTagsInput(e.target.value)}
+                      className="w-full bg-surface border border-border-subtle px-4 py-3 text-sm font-mono text-text-main focus:outline-none focus:border-error transition-colors placeholder:text-text-muted/50 uppercase" 
+                      placeholder="URGENTE, REVISÃO, CLIENTE" 
+                    />
+                    {allAvailableTags.length > 0 && (
+                      <div className="mt-3">
+                        <span className="block text-[9px] font-mono text-text-muted uppercase mb-1.5">Tags Existentes (Clique para adicionar):</span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {allAvailableTags.map(tag => (
+                            <button
+                              key={tag}
+                              type="button"
+                              onClick={() => handleAddTagToInput(tag, tagsInput, setTagsInput)}
+                              className={`text-[9px] font-mono border px-1.5 py-0.5 uppercase transition-opacity hover:opacity-80 ${getTagColor(tag)}`}
+                            >
+                              #{tag}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2">Prioridade</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(['low', 'medium', 'high'] as Priority[]).map(p => (
+                        <button
+                          key={p}
+                          type="button"
+                          onClick={() => setPriority(p)}
+                          className={`py-3 text-[10px] font-mono uppercase tracking-[0.1em] border transition-colors ${
+                            priority === p 
+                              ? getPriorityColor(p) 
+                              : 'bg-surface border-border-subtle text-text-muted hover:border-text-muted'
+                          }`}
+                        >
+                          {getPriorityLabel(p)}
+                          <span className="block text-[8px] opacity-70 mt-1">
+                            +{p === 'high' ? 30 : p === 'medium' ? 20 : 10} XP
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2">Deadline (Opcional)</label>
+                    <input 
+                      type="date" 
+                      value={deadline}
+                      onChange={(e) => setDeadline(e.target.value)}
+                      className="w-full bg-surface border border-border-subtle px-4 py-3 text-sm font-mono text-text-main focus:outline-none focus:border-error transition-colors uppercase" 
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-4 pt-6 border-t border-border-subtle">
+                <button type="button" onClick={() => setIsCreateModalOpen(false)} className="btn-secondary flex items-center gap-2 text-xs py-2 px-6">
+                  CANCELAR
+                </button>
+                <button type="submit" className="btn-primary !bg-error hover:!bg-error/80 !text-black flex items-center gap-2 text-xs py-2 px-6">
+                  <Plus className="w-4 h-4" />
+                  CRIAR TAREFA
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Compartilhamento */}
+      {isShareModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" onClick={() => setIsShareModalOpen(false)}>
+          <div className="bg-surface-2 border border-border-subtle w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-6 border-b border-border-subtle">
+              <div className="flex items-center gap-3">
+                <Share2 className="w-5 h-5 text-info" />
+                <h2 className="text-xl font-extrabold tracking-[-0.3px] uppercase">Compartilhar Board</h2>
+              </div>
+              <button onClick={() => setIsShareModalOpen(false)} className="text-text-muted hover:text-error transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-6">
+              <p className="text-xs font-mono text-text-muted">
+                Convide membros para visualizar ou editar as tarefas deste workspace.
+              </p>
+              
+              <div>
+                <label className="block text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2">E-mail do Usuário</label>
+                <input 
+                  type="email" 
+                  value={shareEmail}
+                  onChange={(e) => setShareEmail(e.target.value)}
+                  className="w-full bg-surface border border-border-subtle px-4 py-3 text-sm font-mono text-text-main focus:outline-none focus:border-info transition-colors placeholder:text-text-muted/50" 
+                  placeholder="exemplo@email.com" 
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2">Permissão</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShareRole('viewer')}
+                    className={`py-2 text-[10px] font-mono uppercase tracking-[0.1em] border transition-colors ${
+                      shareRole === 'viewer' 
+                        ? 'bg-info/10 border-info text-info' 
+                        : 'bg-surface border-border-subtle text-text-muted hover:border-text-muted'
+                    }`}
+                  >
+                    Visualizador
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShareRole('editor')}
+                    className={`py-2 text-[10px] font-mono uppercase tracking-[0.1em] border transition-colors ${
+                      shareRole === 'editor' 
+                        ? 'bg-error/10 border-error text-error' 
+                        : 'bg-surface border-border-subtle text-text-muted hover:border-text-muted'
+                    }`}
+                  >
+                    Editor
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-4 p-6 border-t border-border-subtle bg-surface-3/30">
+              <button onClick={() => setIsShareModalOpen(false)} className="btn-secondary flex items-center gap-2 text-xs py-2 px-6">
+                CANCELAR
+              </button>
+              <button onClick={() => {
+                alert('Funcionalidade de convite requer configuração de permissões no Supabase.');
+                setIsShareModalOpen(false);
+              }} className="btn-primary !bg-info hover:!bg-info/80 !text-black flex items-center gap-2 text-xs py-2 px-6">
+                <Share2 className="w-4 h-4" />
+                ENVIAR CONVITE
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Jarvis Chat Assistant */}
+
     </div>
   );
 }

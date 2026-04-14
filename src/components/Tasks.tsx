@@ -23,6 +23,10 @@ export default function Tasks({ hideHeader = false }: { hideHeader?: boolean }) 
 
   useEffect(() => {
     fetchTasks();
+
+    const handleRefresh = () => fetchTasks();
+    window.addEventListener('app_data_changed', handleRefresh);
+    return () => window.removeEventListener('app_data_changed', handleRefresh);
   }, []);
 
   const fetchTasks = async () => {
@@ -71,7 +75,7 @@ export default function Tasks({ hideHeader = false }: { hideHeader?: boolean }) 
 
       if (error) throw error;
       if (data) {
-        setTasks([data, ...tasks]);
+        setTasks(prev => [data, ...prev]);
         setNewTask('');
       }
     } catch (error) {
@@ -84,7 +88,7 @@ export default function Tasks({ hideHeader = false }: { hideHeader?: boolean }) 
       const newStatus = currentStatus === 'done' ? 'todo' : 'done';
       
       // Optimistic update
-      setTasks(tasks.map(t => t.id === id ? { ...t, status: newStatus as any } : t));
+      setTasks(prev => prev.map(t => t.id === id ? { ...t, status: newStatus as any } : t));
 
       const { error } = await supabase
         .from('work_tasks')
@@ -93,7 +97,7 @@ export default function Tasks({ hideHeader = false }: { hideHeader?: boolean }) 
 
       if (error) {
         // Revert on error
-        setTasks(tasks.map(t => t.id === id ? { ...t, status: currentStatus as any } : t));
+        setTasks(prev => prev.map(t => t.id === id ? { ...t, status: currentStatus as any } : t));
         throw error;
       }
 
@@ -128,7 +132,7 @@ export default function Tasks({ hideHeader = false }: { hideHeader?: boolean }) 
     if (!window.confirm('Tem certeza que deseja excluir esta tarefa?')) return;
     try {
       // Optimistic update
-      setTasks(tasks.filter(t => t.id !== id));
+      setTasks(prev => prev.filter(t => t.id !== id));
 
       const { error } = await supabase
         .from('work_tasks')
@@ -166,7 +170,7 @@ export default function Tasks({ hideHeader = false }: { hideHeader?: boolean }) 
       };
 
       // Optimistic update
-      setTasks(tasks.map(t => t.id === id ? { ...t, ...updatedTask } : t));
+      setTasks(prev => prev.map(t => t.id === id ? { ...t, ...updatedTask } : t));
       setEditingTaskId(null);
 
       const { error } = await supabase
@@ -175,7 +179,8 @@ export default function Tasks({ hideHeader = false }: { hideHeader?: boolean }) 
         .eq('id', id);
 
       if (error) {
-        fetchTasks(); // Revert on error
+        // Revert on error
+        fetchTasks();
         throw error;
       }
     } catch (error) {

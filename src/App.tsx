@@ -7,9 +7,11 @@ import React, { useState, useEffect } from 'react';
 import Layout from './components/Layout';
 import Dashboard from './components/Dashboard';
 import Acoes from './components/Acoes';
+import Vendas from './components/Vendas';
 import Finances from './components/Finances';
 import Levels from './components/Levels';
 import Trabalho from './components/Trabalho';
+import Academy from './components/Academy';
 import Perfil from './components/Perfil';
 import Auth from './components/Auth';
 import { supabase } from './lib/supabase';
@@ -18,7 +20,7 @@ export default function App() {
   const [session, setSession] = useState<any>(null);
   const [isTestMode, setIsTestMode] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeTab, setActiveTab] = useState('vendas'); // Default to vendas for now to show the user
 
   useEffect(() => {
     // Verificar sessão atual
@@ -62,9 +64,11 @@ export default function App() {
     >
       {activeTab === 'dashboard' && <Dashboard />}
       {activeTab === 'acoes' && <Acoes />}
+      {activeTab === 'vendas' && <Vendas />}
       {activeTab === 'tesouro' && <Finances />}
       {activeTab === 'niveis' && <Levels />}
       {activeTab === 'trabalho' && <Trabalho />}
+      {activeTab === 'academy' && <Academy />}
       {activeTab === 'perfil' && <Perfil />}
     </Layout>
   );

@@ -1,5 +1,5 @@
 {
   "name": "EpicLife - Produtividade Gamificada",
   "description": "Aplicativo de produtividade gamificado com rastreador de hábitos, tarefas e finanças.",
-  "requestFramePermissions": []
+  "requestFramePermissions": ["microphone"]
 }
