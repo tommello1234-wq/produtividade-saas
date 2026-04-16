@@ -25,6 +25,7 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
     { id: 'academy', label: 'ACADEMY' },
     { id: 'perfil', label: 'PERFIL' },
     { id: 'segundo-cerebro', label: 'SEGUNDO CÉREBRO' },
+    { id: 'gravyx', label: 'GRAVYX' },
   ];
 
   useEffect(() => {

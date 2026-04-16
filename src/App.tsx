@@ -14,6 +14,7 @@ import Trabalho from './components/Trabalho';
 import Academy from './components/Academy';
 import Perfil from './components/Perfil';
 import SegundoCerebro from './components/SegundoCerebro';
+import SaasMetrics from './components/SaasMetrics';
 import Auth from './components/Auth';
 import { supabase } from './lib/supabase';
 
@@ -72,6 +73,7 @@ export default function App() {
       {activeTab === 'academy' && <Academy />}
       {activeTab === 'perfil' && <Perfil />}
       {activeTab === 'segundo-cerebro' && <SegundoCerebro />}
+      {activeTab === 'gravyx' && <SaasMetrics />}
     </Layout>
   );
 }
