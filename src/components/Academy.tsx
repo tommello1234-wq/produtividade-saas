@@ -3,6 +3,7 @@ import { Plus, MoreHorizontal, Link as LinkIcon, ChevronRight, ChevronDown, Fold
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { supabase } from '../lib/supabase';
 import { MindMapEditor } from './MindMapEditor';
+import { keepInSync, ensureFormat } from '../lib/academyConverters';
 
 type PropertyType = 'text' | 'number' | 'select' | 'multi-select' | 'status' | 'date' | 'person' | 'files' | 'checkbox' | 'url';
 
@@ -430,16 +431,39 @@ export default function Academy() {
   const updateNode = useCallback((nodeId: string, updater: (node: AcademyNode) => AcademyNode) => {
     setData(prev => ({
       ...prev,
-      nodes: (Array.isArray(prev?.nodes) ? prev.nodes : []).map(n => n.id === nodeId ? updater(n) : n)
+      nodes: (Array.isArray(prev?.nodes) ? prev.nodes : []).map(n => {
+        if (n.id !== nodeId) return n;
+        const updated = updater(n);
+        // Auto-sync: se columns ou title mudaram, derivar mindmap;
+        // se mindmap mudou, derivar columns. Pula se já foi sincronizado pelo updater.
+        const colsChanged = updated.columns !== n.columns || updated.title !== n.title;
+        const mmChanged = updated.mindmapData !== n.mindmapData;
+        if (colsChanged && !mmChanged) {
+          return keepInSync(updated, 'table');
+        }
+        if (mmChanged && !colsChanged) {
+          return keepInSync(updated, 'mindmap');
+        }
+        return updated;
+      })
     }));
   }, []);
 
   const handleUpdateMindMap = useCallback((nodes: any[], edges: any[]) => {
     if (!selectedNodeId) return;
-    updateNode(selectedNodeId, node => ({
+    updateNode(selectedNodeId, node => keepInSync({
       ...node,
       mindmapData: { nodes, edges }
-    }));
+    }, 'mindmap'));
+  }, [selectedNodeId, updateNode]);
+
+  // Toggle entre tabela e mapa mental — deriva o formato alvo se ainda não existir
+  const setView = useCallback((targetView: 'table' | 'mindmap') => {
+    if (!selectedNodeId) return;
+    updateNode(selectedNodeId, node => {
+      const ensured = ensureFormat(node, targetView);
+      return { ...ensured, viewType: targetView };
+    });
   }, [selectedNodeId, updateNode]);
 
   const handleAddNode = (parentId: string | null) => {
@@ -946,7 +970,9 @@ export default function Academy() {
       }
 
       node.columns = newColumns;
-      newNodes[nodeIndex] = node;
+      // Sincroniza mindmap com a nova ordem das colunas/cards
+      const synced = keepInSync(node, 'table');
+      newNodes[nodeIndex] = synced;
 
       return { ...prev, nodes: newNodes };
     });
@@ -1400,6 +1426,34 @@ export default function Academy() {
               </div>
               
               <div className="flex items-center gap-3">
+                {/* View toggle: Tabela / Mapa */}
+                <div className="flex bg-surface-3 rounded-sm p-0.5 border border-border-subtle">
+                  <button
+                    onClick={() => setView('table')}
+                    className={`px-3 py-1 text-[10px] font-mono tracking-[0.15em] uppercase font-bold rounded-sm transition-colors flex items-center gap-1.5 ${
+                      (selectedNode.viewType || 'table') === 'table'
+                        ? 'bg-accent text-black'
+                        : 'text-text-muted hover:text-text-main'
+                    }`}
+                    title="Visualizar como tabela"
+                  >
+                    <LayoutGrid className="w-3 h-3" />
+                    Tabela
+                  </button>
+                  <button
+                    onClick={() => setView('mindmap')}
+                    className={`px-3 py-1 text-[10px] font-mono tracking-[0.15em] uppercase font-bold rounded-sm transition-colors flex items-center gap-1.5 ${
+                      selectedNode.viewType === 'mindmap'
+                        ? 'bg-accent text-black'
+                        : 'text-text-muted hover:text-text-main'
+                    }`}
+                    title="Visualizar como mapa mental"
+                  >
+                    <Hash className="w-3 h-3" />
+                    Mapa
+                  </button>
+                </div>
+
                 {saving ? (
                   <div className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-3 rounded-sm text-[10px] font-mono text-text-muted animate-pulse">
                     <Cloud className="w-3 h-3" />
@@ -1411,7 +1465,7 @@ export default function Academy() {
                     Sincronizado
                   </div>
                 )}
-                <button 
+                <button
                   onClick={() => setIsSettingsOpen(true)}
                   className="px-3 py-1.5 bg-surface-3 hover:bg-surface rounded-sm text-xs font-mono text-text-main flex items-center gap-2 transition-colors"
                 >

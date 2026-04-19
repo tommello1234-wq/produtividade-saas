@@ -495,8 +495,23 @@ function MindMapEditorInner(props: MindMapEditorProps) {
 
   const [nodes, setNodes, onNodesChange] = useNodesState(enforcedInitialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
-  const [editingNode, setEditingNode] = useState<Node | null>(null);
+  const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // Used to take undo snapshot only ONCE per edit session, not per keystroke
+  const editSnapshotTakenRef = useRef(false);
+
+  // Always look up latest node data so the modal reflects current state mid-edit
+  const editingNode = editingNodeId ? nodes.find((n) => n.id === editingNodeId) || null : null;
+
+  const setEditingNode = (node: Node | null) => {
+    if (node) {
+      editSnapshotTakenRef.current = false;
+      setEditingNodeId(node.id);
+    } else {
+      editSnapshotTakenRef.current = false;
+      setEditingNodeId(null);
+    }
+  };
 
   const past = useRef<{ nodes: Node[]; edges: Edge[] }[]>([]);
   const future = useRef<{ nodes: Node[]; edges: Edge[] }[]>([]);
@@ -595,11 +610,12 @@ function MindMapEditorInner(props: MindMapEditorProps) {
     if (animate) setTimeout(() => fitView({ padding: 0.2, duration: 400 }), 50);
   }, [setNodes, fitView]);
 
-  // Auto-layout on structural change (edges added/removed/reparented, nodes added/removed)
+  // Auto-layout on structural change (edges added/removed/reparented/REORDERED, nodes added/removed)
+  // IMPORTANTE: edges NÃO sortidos — mudança de ordem precisa disparar relayout pra reposicionar irmãos
   const structuralKey = useMemo(() => {
+    // edges NÃO sortidos — preserva ordem (importante pra reorder de irmãos)
     const edgeKey = edges
       .map((e) => `${e.source}->${e.target}`)
-      .sort()
       .join('|');
     const nodeKey = nodes
       .map((n) => `${n.id}:${n.data?.isCollapsed ? 'c' : 'o'}`)
@@ -764,7 +780,50 @@ function MindMapEditorInner(props: MindMapEditorProps) {
       const movingIds = new Set(reparentable.map((n) => n.id));
       const intersects = getIntersectingNodes(draggedNode) || [];
       const targetCandidates = intersects.filter((n: Node) => !movingIds.has(n.id));
-      if (targetCandidates.length === 0) return;
+
+      // ----- SIBLING REORDER -----
+      // Se não soltou em cima de outro nó, talvez seja só uma reordenação entre irmãos
+      if (targetCandidates.length === 0) {
+        // Só reordenamos se está movendo APENAS um nó (não múltipla seleção)
+        if (reparentable.length === 1) {
+          const n = reparentable[0];
+          // Acha o pai (única edge incoming)
+          const parentEdge = currentEdges.current.find((e) => e.target === n.id);
+          if (parentEdge) {
+            const parentId = parentEdge.source;
+            // Lista ordenada atual dos irmãos por posição Y atual
+            const siblingEdges = currentEdges.current
+              .filter((e) => e.source === parentId)
+              .map((e) => {
+                const sibNode = currentNodes.current.find((nn) => nn.id === e.target);
+                return { edge: e, y: sibNode?.position.y ?? 0 };
+              });
+            // Y atual do nó arrastado (já com a nova posição)
+            const draggedY = draggedNode.position.y;
+            // Substitui a Y do irmão arrastado pela Y nova de drop
+            const siblingsWithNewY = siblingEdges.map((s) =>
+              s.edge.target === n.id ? { ...s, y: draggedY } : s
+            );
+            siblingsWithNewY.sort((a, b) => a.y - b.y);
+            const newOrderIds = siblingsWithNewY.map((s) => s.edge.target);
+            const oldOrderIds = siblingEdges.map((s) => s.edge.target);
+            const orderChanged = newOrderIds.some((id, i) => id !== oldOrderIds[i]);
+            if (orderChanged) {
+              takeSnapshot();
+              setEdges((eds) => {
+                // Remove os edges desse pai e re-adiciona na ordem nova
+                const otherEdges = eds.filter((e) => e.source !== parentId);
+                const reorderedEdges = newOrderIds.map((targetId) => {
+                  const orig = eds.find((e) => e.source === parentId && e.target === targetId);
+                  return orig!;
+                });
+                return [...otherEdges, ...reorderedEdges];
+              });
+            }
+          }
+        }
+        return;
+      }
       const target = targetCandidates[0];
 
       // Prevent cycles: target cannot be a descendant of any moving node
@@ -894,15 +953,19 @@ function MindMapEditorInner(props: MindMapEditorProps) {
   };
 
   const saveNodeDetails = (updatedData: any) => {
-    takeSnapshot();
+    // Snapshot do undo APENAS uma vez por sessão de edição (não por keystroke)
+    if (!editSnapshotTakenRef.current) {
+      takeSnapshot();
+      editSnapshotTakenRef.current = true;
+    }
     if (updatedData._delete) {
-      setNodes((nds) => nds.filter((n) => n.id !== editingNode?.id));
-      setEdges((eds) => eds.filter((e) => e.source !== editingNode?.id && e.target !== editingNode?.id));
+      setNodes((nds) => nds.filter((n) => n.id !== editingNodeId));
+      setEdges((eds) => eds.filter((e) => e.source !== editingNodeId && e.target !== editingNodeId));
       setEditingNode(null);
       return;
     }
     setNodes((nds) =>
-      nds.map((n) => (n.id === editingNode?.id ? { ...n, data: { ...n.data, ...updatedData } } : n))
+      nds.map((n) => (n.id === editingNodeId ? { ...n, data: { ...n.data, ...updatedData } } : n))
     );
   };
 
@@ -927,11 +990,14 @@ function MindMapEditorInner(props: MindMapEditorProps) {
         nodeTypes={nodeTypes}
         fitView
         nodesDraggable={true}
-        selectionOnDrag={true}
-        panOnDrag={[1, 2]}
+        // Pan com drag esquerdo (padrão Figma)
+        panOnDrag={true}
         panOnScroll={true}
+        // Marquee de seleção SÓ com Shift+drag (evita seleções acidentais)
+        selectionOnDrag={false}
+        selectionKeyCode={'Shift'}
         selectNodesOnDrag={false}
-        multiSelectionKeyCode={['Meta', 'Control', 'Shift']}
+        multiSelectionKeyCode={['Meta', 'Control']}
         deleteKeyCode={['Delete', 'Backspace']}
         className="bg-bg"
         colorMode="dark"
