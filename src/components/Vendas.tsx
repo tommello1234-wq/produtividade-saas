@@ -44,6 +44,7 @@ export default function Vendas() {
   const [isSyncingAsaas, setIsSyncingAsaas] = useState(false);
   const [syncMessage, setSyncMessage] = useState<{type: 'success' | 'error' | 'info', text: string} | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
+  const [isImportingTicto, setIsImportingTicto] = useState(false);
 
   const toggleProduct = (productName: string) => {
     setExpandedProducts(prev => ({ ...prev, [productName]: !prev[productName] }));
@@ -83,6 +84,84 @@ export default function Vendas() {
     }
   };
 
+  // -------- Importador de CSV da Ticto --------
+  const parseCSV = (text: string): Array<Record<string, string>> => {
+    // Remove BOM se houver
+    const clean = text.replace(/^\uFEFF/, '').trim();
+    const lines = clean.split(/\r?\n/).filter((l) => l.trim().length > 0);
+    if (lines.length < 2) return [];
+    // Detecta separador (vírgula ou ponto-e-vírgula)
+    const firstLine = lines[0];
+    const sep = firstLine.includes(';') ? ';' : ',';
+    // Parser simples respeitando aspas
+    const parseLine = (line: string): string[] => {
+      const out: string[] = [];
+      let cur = '';
+      let inQuote = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') {
+          if (inQuote && line[i + 1] === '"') { cur += '"'; i++; }
+          else inQuote = !inQuote;
+        } else if (ch === sep && !inQuote) {
+          out.push(cur); cur = '';
+        } else {
+          cur += ch;
+        }
+      }
+      out.push(cur);
+      return out.map((s) => s.trim());
+    };
+    const headers = parseLine(lines[0]);
+    return lines.slice(1).map((line) => {
+      const vals = parseLine(line);
+      const obj: Record<string, string> = {};
+      headers.forEach((h, i) => { obj[h] = vals[i] || ''; });
+      return obj;
+    });
+  };
+
+  const handleTictoImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // permite re-importar o mesmo arquivo
+    if (!file || !userId) return;
+    setIsImportingTicto(true);
+    setSyncMessage(null);
+    try {
+      // Ticto exporta CSV em ISO-8859-1 (Latin-1). Tenta UTF-8 primeiro;
+      // se detectar caracteres de substituição, refaz como Latin-1.
+      const buffer = await file.arrayBuffer();
+      let text = new TextDecoder('utf-8').decode(buffer);
+      if (text.includes('\uFFFD')) {
+        text = new TextDecoder('iso-8859-1').decode(buffer);
+      }
+      const rows = parseCSV(text);
+      if (rows.length === 0) {
+        setSyncMessage({ type: 'error', text: 'CSV vazio ou inválido.' });
+        return;
+      }
+      const res = await fetch('/api/ticto/import-csv', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, rows }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setSyncMessage({ type: 'error', text: data.error });
+      } else if (data.count === 0) {
+        setSyncMessage({ type: 'info', text: data.message || `Nenhuma nova venda. ${data.skipped || 0} já existiam.` });
+      } else {
+        setSyncMessage({ type: 'success', text: `${data.count} vendas Ticto importadas! ${data.skipped || 0} já existiam.` });
+        fetchData();
+      }
+    } catch (err: any) {
+      setSyncMessage({ type: 'error', text: err?.message || 'Falha ao importar CSV.' });
+    } finally {
+      setIsImportingTicto(false);
+      setTimeout(() => setSyncMessage(null), 6000);
+    }
+  };
+
   const fetchData = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -96,9 +175,10 @@ export default function Vendas() {
 
       if (error) throw error;
       
-      const allTxs = (data || []).filter(tx => 
-        tx.description.includes('[Asaas]') || 
-        tx.description.includes('[CNPJ]') || 
+      const allTxs = (data || []).filter(tx =>
+        tx.description.includes('[Asaas]') ||
+        tx.description.includes('[Ticto]') ||
+        tx.description.includes('[CNPJ]') ||
         tx.description.includes('[Receita]')
       );
       
@@ -381,8 +461,12 @@ export default function Vendas() {
     }
   };
 
-  // Separate transactions
-  const asaasTxs = transactions.filter(tx => tx.description.includes('[Asaas]') || tx.description.includes('[Receita]'));
+  // Separate transactions (Asaas + Ticto + manual receitas)
+  const asaasTxs = transactions.filter(tx =>
+    tx.description.includes('[Asaas]') ||
+    tx.description.includes('[Ticto]') ||
+    tx.description.includes('[Receita]')
+  );
   const cnpjExpenses = transactions.filter(tx => tx.description.includes('[CNPJ]'));
 
   // Group CNPJ Expenses
@@ -635,6 +719,22 @@ export default function Vendas() {
               <Activity className={`w-4 h-4 ${isSyncingAsaas ? 'animate-spin' : ''}`} />
               {isSyncingAsaas ? 'Sincronizando...' : 'Sincronizar Asaas'}
             </button>
+            <label
+              className={`bg-info text-bg px-4 py-2 text-xs font-bold uppercase tracking-[0.1em] hover:bg-info/90 transition-colors flex items-center gap-2 cursor-pointer ${
+                isImportingTicto ? 'opacity-50 cursor-not-allowed' : ''
+              }`}
+              title="Importar histórico de vendas Ticto via CSV exportado do painel"
+            >
+              <Activity className={`w-4 h-4 ${isImportingTicto ? 'animate-spin' : ''}`} />
+              {isImportingTicto ? 'Importando...' : 'Importar Ticto (CSV)'}
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                onChange={handleTictoImport}
+                disabled={isImportingTicto}
+                className="hidden"
+              />
+            </label>
             <button
               onClick={() => setIsIncomeModalOpen(true)}
               className="bg-success text-bg px-4 py-2 text-xs font-bold uppercase tracking-[0.1em] hover:bg-success/90 transition-colors flex items-center gap-2"

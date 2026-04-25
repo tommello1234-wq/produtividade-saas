@@ -24,7 +24,7 @@ async function startServer() {
   const PORT = Number(process.env.PORT) || 8080;
 
   // Middleware to parse JSON bodies
-  app.use(express.json());
+  app.use(express.json({ limit: '20mb' }));
 
   // Webhook endpoint for Asaas
   app.post("/api/webhook/asaas/:userId", async (req, res) => {
@@ -74,6 +74,258 @@ async function startServer() {
     } catch (error) {
       console.error('Webhook error:', error);
       res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // ----------------- TICTO WEBHOOK -----------------
+  // Recebe eventos da Ticto (postback v2.0) e grava em financial_transactions
+  // URL pra cadastrar no painel Ticto: https://SEU-DOMINIO/api/webhook/ticto/SEU_USER_ID
+  app.post("/api/webhook/ticto/:userId", async (req, res) => {
+    try {
+      const { userId } = req.params;
+      const payload = req.body || {};
+      const status = String(payload.status || '').toLowerCase();
+      const order = payload.order || payload.transaction || payload;
+
+      console.log(`Received Ticto webhook for user ${userId}: status=${status}`);
+
+      if (!supabase) {
+        console.error('Supabase is not configured. Cannot save webhook data.');
+        return res.status(500).json({ error: 'Database not configured' });
+      }
+
+      // Validação opcional via token (Ticto envia "token" no payload em v2)
+      const expectedToken = process.env.TICTO_WEBHOOK_TOKEN;
+      if (expectedToken && payload.token !== expectedToken) {
+        console.warn('Ticto webhook: token mismatch');
+        return res.status(401).json({ error: 'Invalid token' });
+      }
+
+      // Identifica produto, valor, ID, data
+      const productName = payload.product?.name || payload.product_name || order?.product?.name || 'Venda Ticto';
+      const orderHash = order?.hash || order?.order_hash || payload.transaction_hash || payload.hash || `${Date.now()}`;
+      const amountCents = order?.amount ?? payload.amount ?? order?.value ?? 0;
+      // Ticto envia em centavos no v2.0 — converter pra reais
+      const amount = typeof amountCents === 'number' && amountCents > 1000 ? amountCents / 100 : Number(amountCents) || 0;
+      const date = (order?.date || payload.created_at || new Date().toISOString()).split('T')[0];
+
+      // Status que GERAM uma venda válida (entrada de dinheiro)
+      const incomeStatuses = ['authorized', 'close', 'pix_paid', 'bank_slip_paid'];
+      // Status que REVERTEM uma venda (chargeback / refund)
+      const reverseStatuses = ['refunded', 'chargeback', 'claimed'];
+      // Status pendentes (não geram entrada ainda)
+      const pendingStatuses = ['pix_created', 'bank_slip_created', 'waiting_payment', 'trial'];
+
+      if (incomeStatuses.includes(status)) {
+        const newTx = {
+          user_id: userId,
+          description: `[Ticto] ${productName} (ID: ${orderHash})`,
+          category: 'Vendas|#10B981',
+          amount: Math.abs(amount),
+          type: 'income',
+          date,
+        };
+        const { error } = await supabase.from('financial_transactions').insert([newTx]);
+        if (error) {
+          console.error('Error inserting Ticto transaction:', error);
+          if (error.message?.includes('row-level security')) {
+            console.error('RLS Error: server needs SUPABASE_SERVICE_ROLE_KEY.');
+          }
+          return res.status(500).json({ error: 'Failed to insert transaction', details: error.message });
+        }
+        console.log('Recorded Ticto sale for user', userId);
+      } else if (reverseStatuses.includes(status)) {
+        const newTx = {
+          user_id: userId,
+          description: `[Ticto] ESTORNO: ${productName} (ID: ${orderHash})`,
+          category: 'Estorno|#EF4444',
+          amount: Math.abs(amount),
+          type: 'expense',
+          date,
+        };
+        const { error } = await supabase.from('financial_transactions').insert([newTx]);
+        if (error) {
+          console.error('Error inserting Ticto reversal:', error);
+        } else {
+          console.log('Recorded Ticto reversal for user', userId);
+        }
+      } else if (pendingStatuses.includes(status)) {
+        // Pendente: não grava como income, só loga (opcional: armazenar em outra tabela depois)
+        console.log(`Ticto pending status (${status}) for ${productName} — not recorded as income`);
+      } else {
+        console.log(`Ticto status not handled: ${status}`);
+      }
+
+      res.json({ received: true });
+    } catch (error: any) {
+      console.error('Ticto webhook error:', error);
+      res.status(500).json({ error: 'Internal server error', details: error?.message });
+    }
+  });
+
+  // ----------------- TICTO CSV IMPORT -----------------
+  // Recebe um array de linhas do CSV exportado pelo painel da Ticto
+  // Body: { userId: string, rows: Array<{ data, status, produto, valor, hash, ... }> }
+  app.post("/api/ticto/import-csv", async (req, res) => {
+    try {
+      const { userId, rows } = req.body || {};
+      if (!userId) return res.status(400).json({ error: 'userId obrigatório' });
+      if (!Array.isArray(rows)) return res.status(400).json({ error: 'rows precisa ser um array' });
+      if (!supabase) return res.status(500).json({ error: 'Banco não configurado' });
+
+      // Buscar IDs já existentes pra evitar duplicação
+      const { data: existing } = await supabase
+        .from('financial_transactions')
+        .select('description')
+        .eq('user_id', userId)
+        .like('description', '%[Ticto]%');
+
+      const existingIds = new Set(
+        (existing || [])
+          .map((tx: any) => {
+            const m = tx.description.match(/\(ID: ([^)]+)\)/);
+            return m ? m[1] : null;
+          })
+          .filter(Boolean)
+      );
+
+      const incomeStatusKeys = ['aprovado', 'aprovada', 'approved', 'authorized', 'autorizado', 'autorizada', 'paid', 'pago', 'paga', 'concluido', 'concluida', 'close'];
+      const reverseStatusKeys = ['estornado', 'estornada', 'reembolsado', 'reembolsada', 'refunded', 'chargeback', 'cancelado', 'cancelada'];
+
+      // Helper: pega o primeiro valor não-vazio entre várias chaves possíveis (tolerante a acento/encoding)
+      const pick = (row: any, ...keys: string[]) => {
+        for (const k of keys) {
+          if (row[k] !== undefined && row[k] !== '') return row[k];
+        }
+        return '';
+      };
+
+      const newTxs: any[] = [];
+      let skipped = 0;
+
+      for (const row of rows) {
+        // Status — tolerante a acentos/encoding
+        const status = String(
+          pick(row, 'Status', 'status', 'Situação', 'Situacao', 'situacao')
+        ).toLowerCase().trim();
+
+        // Produto + Oferta combinados na descrição
+        const productName = pick(
+          row,
+          'Nome do Produto',
+          'product',
+          'produto',
+          'Produto',
+          'product_name'
+        ) || 'Venda Ticto';
+        const offerName = pick(row, 'Nome da Oferta', 'offer', 'Oferta');
+        const fullProductName = offerName ? `${productName} - ${offerName}` : productName;
+
+        // ID único pra dedup: Código da Transação + Código da Oferta (mesma transação pode ter várias linhas/itens)
+        const transactionCode = pick(
+          row,
+          'Código da Transação',
+          'Codigo da Transacao',
+          'transaction_code',
+          'transaction_hash'
+        );
+        const offerCode = pick(row, 'Código da Oferta', 'Codigo da Oferta', 'offer_code');
+        const orderCode = pick(row, 'Código do Pedido', 'Codigo do Pedido', 'order_code');
+        const hash = transactionCode
+          ? `${transactionCode}${offerCode ? '_' + offerCode : ''}`
+          : (orderCode || `${Date.now()}_${Math.random().toString(36).slice(2)}`);
+
+        // Valor — Ticto tem "Valor do Item" (item) e "Valor Pago" (cliente pagou, com taxa). Usa Valor do Item.
+        const valorRaw = pick(
+          row,
+          'Valor do Item',
+          'Valor Pago',
+          'Valor do Pedido',
+          'value',
+          'valor',
+          'Valor',
+          'amount'
+        );
+        const amount = typeof valorRaw === 'number'
+          ? valorRaw
+          : Number(String(valorRaw).replace(/[^\d,.-]/g, '').replace(/\.(?=\d{3})/g, '').replace(',', '.')) || 0;
+
+        // Data — prefere Data do Pedido (timestamp da venda)
+        const dateRaw = pick(
+          row,
+          'Data do Pedido',
+          'Data da Transação',
+          'Data da Transacao',
+          'Data da Venda',
+          'date',
+          'data',
+          'Data',
+          'created_at'
+        ) || new Date().toISOString();
+        let date = String(dateRaw);
+        if (date.includes('/')) {
+          // "DD/MM/YYYY HH:MM:SS" ou "DD/MM/YYYY"
+          const [d, m, y] = date.split(' ')[0].split('/');
+          if (d && m && y) date = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+        } else {
+          date = date.split('T')[0];
+        }
+
+        if (existingIds.has(String(hash))) {
+          skipped++;
+          continue;
+        }
+
+        const isIncome = incomeStatusKeys.some((k) => status.includes(k));
+        const isReverse = reverseStatusKeys.some((k) => status.includes(k));
+
+        if (amount <= 0) {
+          skipped++;
+          continue;
+        }
+
+        if (isReverse) {
+          newTxs.push({
+            user_id: userId,
+            description: `[Ticto] ESTORNO: ${fullProductName} (ID: ${hash})`,
+            category: 'Estorno|#EF4444',
+            amount: Math.abs(amount),
+            type: 'expense',
+            date,
+          });
+        } else if (isIncome || (!status && amount > 0)) {
+          // Status vazio + valor > 0 = presume venda válida
+          newTxs.push({
+            user_id: userId,
+            description: `[Ticto] ${fullProductName} (ID: ${hash})`,
+            category: 'Vendas|#10B981',
+            amount: Math.abs(amount),
+            type: 'income',
+            date,
+          });
+        } else {
+          // Status pendente/recusado/outro — pula
+          skipped++;
+        }
+      }
+
+      if (newTxs.length === 0) {
+        return res.json({ success: true, count: 0, skipped, message: 'Nenhuma nova venda pra importar.' });
+      }
+
+      const { error } = await supabase.from('financial_transactions').insert(newTxs);
+      if (error) {
+        console.error('Ticto CSV import error:', error);
+        if (error.message?.includes('row-level security')) {
+          return res.status(500).json({ error: 'Erro de RLS: configure SUPABASE_SERVICE_ROLE_KEY no servidor.' });
+        }
+        return res.status(500).json({ error: 'Falha ao inserir', details: error.message });
+      }
+
+      res.json({ success: true, count: newTxs.length, skipped });
+    } catch (error: any) {
+      console.error('Ticto CSV import exception:', error);
+      res.status(500).json({ error: error?.message || 'Erro interno' });
     }
   });
 
@@ -403,18 +655,91 @@ async function startServer() {
       const totalContractedThisMonth = sumValues(guaranteedPayments.filter(inThisMonth));
       const totalRevenueThisMonth = sumValues(receivedPayments.filter(inThisMonth));
 
+      // ----------------- TICTO (do Supabase, gravadas via webhook/CSV) -----------------
+      // Lê transações Ticto do user_id passado no body que tenham a keyword na descrição
+      const { userId: requestUserId } = req.body || {};
+      let tictoRevenue = 0;
+      let tictoRevenueThisMonth = 0;
+      let tictoTopCustomers: any[] = [];
+      let tictoRecentActivity: any[] = [];
+      let tictoCount = 0;
+
+      if (requestUserId && supabase) {
+        try {
+          const { data: tictoTxs } = await supabase
+            .from('financial_transactions')
+            .select('description, amount, type, date')
+            .eq('user_id', requestUserId)
+            .like('description', '%[Ticto]%');
+
+          const filteredTicto = (tictoTxs || []).filter(
+            (tx: any) => tx.description.toLowerCase().includes(kwLower)
+          );
+          // Vendas (income) somam, estornos (expense) subtraem
+          filteredTicto.forEach((tx: any) => {
+            const sign = tx.type === 'expense' ? -1 : 1;
+            tictoRevenue += Number(tx.amount || 0) * sign;
+          });
+          // Mês corrente
+          filteredTicto
+            .filter((tx: any) => new Date(tx.date) >= monthStart)
+            .forEach((tx: any) => {
+              const sign = tx.type === 'expense' ? -1 : 1;
+              tictoRevenueThisMonth += Number(tx.amount || 0) * sign;
+            });
+          tictoCount = filteredTicto.length;
+
+          // Atividade recente: últimas 5 vendas Ticto
+          tictoRecentActivity = filteredTicto
+            .filter((tx: any) => tx.type === 'income')
+            .sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime())
+            .slice(0, 5)
+            .map((tx: any) => {
+              // Extrai nome do produto da descrição "[Ticto] PRODUTO (ID: xxx)"
+              const m = tx.description.match(/\[Ticto\]\s*(.+?)\s*\(ID:/);
+              const product = m ? m[1] : tx.description;
+              return {
+                id: `ticto_${tx.date}_${Math.random().toString(36).slice(2, 7)}`,
+                customer: product,
+                value: Number(tx.amount || 0),
+                date: tx.date,
+                description: `[Ticto] ${product}`,
+              };
+            });
+        } catch (e: any) {
+          console.error('Erro ao buscar dados Ticto do Supabase:', e);
+        }
+      }
+
+      // Combinar Asaas + Ticto nos cards de FATURADO/RECEBIDO
+      const combinedTotalRevenue = totalRevenue + tictoRevenue;
+      const combinedTotalContracted = totalContracted + tictoRevenue; // Ticto só conta vendas confirmadas
+      const combinedTotalRevenueThisMonth = totalRevenueThisMonth + tictoRevenueThisMonth;
+      const combinedTotalContractedThisMonth = totalContractedThisMonth + tictoRevenueThisMonth;
+
+      // Mesclar atividade recente Asaas + Ticto, ordenar por data, top 10
+      const mergedActivity = [...recentActivity, ...tictoRecentActivity]
+        .sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime())
+        .slice(0, 10);
+
       res.json({
         mrr: Math.round(mrr * 100) / 100,
         arr: Math.round(arr * 100) / 100,
-        totalContracted: Math.round(totalContracted * 100) / 100,
-        totalRevenue: Math.round(totalRevenue * 100) / 100,
-        totalPending: Math.round(totalPending * 100) / 100,
+        // Totais combinados (Asaas + Ticto)
+        totalContracted: Math.round(combinedTotalContracted * 100) / 100,
+        totalRevenue: Math.round(combinedTotalRevenue * 100) / 100,
+        totalPending: Math.round(totalPending * 100) / 100, // só Asaas (Ticto não tem pending tracking)
         recurringOpen: Math.round(recurringOpen * 100) / 100,
         annualSales: Math.round(annualSales * 100) / 100,
         monthlySales: Math.round(monthlySales * 100) / 100,
         annualCustomersCount,
-        totalContractedThisMonth: Math.round(totalContractedThisMonth * 100) / 100,
-        totalRevenueThisMonth: Math.round(totalRevenueThisMonth * 100) / 100,
+        totalContractedThisMonth: Math.round(combinedTotalContractedThisMonth * 100) / 100,
+        totalRevenueThisMonth: Math.round(combinedTotalRevenueThisMonth * 100) / 100,
+        // Breakdown por origem
+        asaasRevenue: Math.round(totalRevenue * 100) / 100,
+        tictoRevenue: Math.round(tictoRevenue * 100) / 100,
+        tictoCount,
+        // SaaS metrics (só do Asaas — Ticto não tem state de subscription)
         activeUsers,
         newUsersThisMonth,
         churnedUsersThisMonth,
@@ -424,9 +749,9 @@ async function startServer() {
         avgLifetimeMonths: Math.round(avgLifetimeMonths * 10) / 10,
         monthlyMRR,
         topCustomers,
-        recentActivity,
+        recentActivity: mergedActivity,
         totalSubsCount: subs.length,
-        totalPaymentsCount: filteredPayments.length,
+        totalPaymentsCount: filteredPayments.length + tictoCount,
       });
     } catch (e: any) {
       console.error('SaaS metrics error:', e);

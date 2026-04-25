@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { supabase } from '../lib/supabase';
 import {
   TrendingUp,
   Users,
@@ -35,6 +36,9 @@ interface Metrics {
   annualCustomersCount: number;
   totalContractedThisMonth: number;
   totalRevenueThisMonth: number;
+  asaasRevenue: number;
+  tictoRevenue: number;
+  tictoCount: number;
   activeUsers: number;
   newUsersThisMonth: number;
   churnedUsersThisMonth: number;
@@ -105,10 +109,11 @@ export default function SaasMetrics() {
     setLoading(true);
     setError(null);
     try {
+      const { data: { user } } = await supabase.auth.getUser();
       const res = await fetch('/api/asaas/saas-metrics', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keyword: 'Gravyx' }),
+        body: JSON.stringify({ keyword: 'Gravyx', userId: user?.id }),
       });
       const data = await res.json();
       if (data.error) {
@@ -242,6 +247,24 @@ export default function SaasMetrics() {
           value={fmtBRL(metrics.monthlySales)}
           hint="Receita vinda das mensalidades"
           Icon={Calendar}
+          accent="text-info"
+        />
+      </div>
+
+      {/* Breakdown por origem: Asaas vs Ticto */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <KpiCard
+          label="VIA ASAAS"
+          value={fmtBRL(metrics.asaasRevenue)}
+          hint="Recebido via Asaas (cartão, PIX, boleto)"
+          Icon={DollarSign}
+          accent="text-accent"
+        />
+        <KpiCard
+          label="VIA TICTO"
+          value={fmtBRL(metrics.tictoRevenue)}
+          hint={`${metrics.tictoCount} venda(s) registrada(s) via Ticto`}
+          Icon={Activity}
           accent="text-info"
         />
       </div>
