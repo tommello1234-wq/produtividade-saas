@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Plus, MoreHorizontal, Link as LinkIcon, ChevronRight, ChevronDown, Folder, LayoutGrid, Settings, Trash2, Edit2, X, Check, BookOpen, Cloud, AlignLeft, GripVertical, PlayCircle, CheckSquare, ImagePlus, Copy, Calendar, User, Type, ChevronDownCircle, Hash, List, Loader2, Paperclip, PanelLeft } from 'lucide-react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { supabase } from '../lib/supabase';
@@ -218,6 +218,12 @@ export default function Academy() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // ID único por aba/sessão — usado pra ignorar updates de realtime que vieram de mim mesmo.
+  const clientIdRef = useRef<string>(`tab_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`);
+  // Quando recebemos um update via Realtime de OUTRA aba, aplicamos via setData.
+  // Esse ref instrui o useEffect de save a NÃO re-salvar (evita loop e sobrescrever).
+  const skipNextSaveRef = useRef(false);
   const [dragState, setDragState] = useState<{ id: string, position: 'before' | 'after' | 'inside' } | null>(null);
   const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null);
 
@@ -370,12 +376,58 @@ export default function Academy() {
     };
   }, []);
 
+  // Realtime: sincroniza entre abas/dispositivos. Se outra aba salvou (last_client_id !== nosso clientId),
+  // atualizamos o estado local SEM re-salvar (evita sobrescrever).
+  useEffect(() => {
+    if (!isInitialized) return;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    let cancelled = false;
+
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user || cancelled) return;
+
+      channel = supabase
+        .channel(`academy_data:${user.id}`)
+        .on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'academy_data',
+            filter: `user_id=eq.${user.id}`,
+          },
+          (payload: any) => {
+            const remoteClientId = payload.new?.last_client_id;
+            // Ignora se a notificação veio do nosso próprio save.
+            if (remoteClientId === clientIdRef.current) return;
+            if (!payload.new?.data) return;
+            // Bloqueia o próximo save (vai disparar pelo setData abaixo) pra não sobrescrever.
+            skipNextSaveRef.current = true;
+            setData(payload.new.data);
+          }
+        )
+        .subscribe();
+    })();
+
+    return () => {
+      cancelled = true;
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, [isInitialized]);
+
   useEffect(() => {
     if (!isInitialized) return;
 
+    // Update veio de outra aba via Realtime — não re-salvar (causaria loop / overwrite).
+    if (skipNextSaveRef.current) {
+      skipNextSaveRef.current = false;
+      return;
+    }
+
     const saveData = async () => {
       setSaving(true);
-      
+
       // Always save to localStorage as a reliable backup, but handle quota exceeded errors
       try {
         localStorage.setItem('academy_data_v2', JSON.stringify(data));
@@ -389,10 +441,11 @@ export default function Academy() {
 
         const { error } = await supabase
           .from('academy_data')
-          .upsert({ 
-            user_id: user.id, 
+          .upsert({
+            user_id: user.id,
             data: data,
-            updated_at: new Date().toISOString()
+            updated_at: new Date().toISOString(),
+            last_client_id: clientIdRef.current,
           }, { onConflict: 'user_id' });
 
         if (error) {

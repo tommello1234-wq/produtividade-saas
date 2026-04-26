@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { ArrowUpRight, ArrowDownRight, Plus, Wallet, TrendingUp, Target, Coins, Activity, Calendar, DollarSign, X, Trash2, ChevronDown, ChevronUp, MoreHorizontal, Edit2, Check, Settings } from 'lucide-react';
+import { ArrowUpRight, ArrowDownRight, Plus, Wallet, TrendingUp, Target, Coins, Activity, Calendar, DollarSign, X, Trash2, ChevronDown, ChevronUp, ChevronRight, MoreHorizontal, Edit2, Check, Settings } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 type SubTab = 'overview' | 'transactions' | 'patrimony' | 'treasures' | 'sales';
@@ -100,7 +100,10 @@ export default function Finances() {
 
   const [userId, setUserId] = useState<string | null>(null);
   const [isSyncingAsaas, setIsSyncingAsaas] = useState(false);
+  const [isImportingFatura, setIsImportingFatura] = useState(false);
   const [syncMessage, setSyncMessage] = useState<{type: 'success' | 'error' | 'info', text: string} | null>(null);
+  const [expandedFaturaMonths, setExpandedFaturaMonths] = useState<Set<string>>(new Set());
+  const [expandedFaturaVendors, setExpandedFaturaVendors] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -205,6 +208,83 @@ export default function Finances() {
     return () => clearTimeout(timeoutId);
   }, [assetTicker, assetType]);
 
+  // -------- Importador de CSV de FATURA pessoal --------
+  const parseCSV = (text: string): Array<Record<string, string>> => {
+    const clean = text.replace(/^\uFEFF/, '').trim();
+    const lines = clean.split(/\r?\n/).filter((l) => l.trim().length > 0);
+    if (lines.length < 2) return [];
+    const sep = lines[0].includes(';') ? ';' : ',';
+    const parseLine = (line: string): string[] => {
+      const out: string[] = [];
+      let cur = '';
+      let inQuote = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') {
+          if (inQuote && line[i + 1] === '"') { cur += '"'; i++; }
+          else inQuote = !inQuote;
+        } else if (ch === sep && !inQuote) {
+          out.push(cur); cur = '';
+        } else {
+          cur += ch;
+        }
+      }
+      out.push(cur);
+      return out.map((s) => s.trim());
+    };
+    const headers = parseLine(lines[0]);
+    return lines.slice(1).map((line) => {
+      const vals = parseLine(line);
+      const obj: Record<string, string> = {};
+      headers.forEach((h, i) => { obj[h] = vals[i] || ''; });
+      return obj;
+    });
+  };
+
+  const handleFaturaImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !userId) return;
+    setIsImportingFatura(true);
+    setSyncMessage(null);
+    try {
+      const buffer = await file.arrayBuffer();
+      let text = new TextDecoder('utf-8').decode(buffer);
+      if (text.includes('\uFFFD')) {
+        text = new TextDecoder('iso-8859-1').decode(buffer);
+      }
+      const rows = parseCSV(text);
+      if (rows.length === 0) {
+        setSyncMessage({ type: 'error', text: 'CSV vazio ou inválido.' });
+        return;
+      }
+      const casaTag = customTags.find(t => t.name.toLowerCase() === 'casa');
+      const defaultCategory = casaTag ? `${casaTag.name}|${casaTag.color}` : 'Outros|#9CA3AF';
+      const res = await fetch('/api/expenses/import-csv', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, rows, prefix: '[Fatura]', defaultCategory }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setSyncMessage({ type: 'error', text: data.error });
+      } else if (data.count === 0) {
+        setSyncMessage({ type: 'info', text: data.message || `Nenhuma nova despesa. ${data.skipped || 0} já existiam.` });
+      } else {
+        setSyncMessage({
+          type: 'success',
+          text: `${data.count} despesas importadas em ${data.vendors} grupo(s)! ${data.skipped || 0} já existiam.`,
+        });
+        fetchData();
+      }
+    } catch (err: any) {
+      setSyncMessage({ type: 'error', text: err?.message || 'Falha ao importar CSV.' });
+    } finally {
+      setIsImportingFatura(false);
+      setTimeout(() => setSyncMessage(null), 6000);
+    }
+  };
+
   const fetchData = async () => {
     setLoading(true);
     try {
@@ -235,10 +315,12 @@ export default function Finances() {
           ]);
         }
 
-        const realTransactions = txRes.data.filter(t => 
-          t.description !== '__FINANCIAL_TAGS__' && 
-          !t.description.includes('[Asaas]') && 
-          !t.description.includes('[CNPJ]')
+        const realTransactions = txRes.data.filter(t =>
+          t.description !== '__FINANCIAL_TAGS__' &&
+          !t.description.includes('[Asaas]') &&
+          !t.description.includes('[CNPJ]') &&
+          !t.description.includes('[Ticto]') &&
+          !t.description.includes('[Receita]')
         );
         setTransactions(realTransactions);
         
@@ -294,13 +376,33 @@ export default function Finances() {
         });
 
         if (newTransactionsToInsert.length > 0) {
-          const { data, error } = await supabase
+          // Re-check no DB imediatamente antes de inserir, pra blindar contra
+          // race com outras chamadas de fetchData() concorrentes (ex: mount + app_data_changed)
+          const descs = newTransactionsToInsert.map(t => t.description);
+          const dates = newTransactionsToInsert.map(t => t.date);
+          const { data: alreadyExist } = await supabase
             .from('financial_transactions')
-            .insert(newTransactionsToInsert)
-            .select();
-            
-          if (!error && data) {
-            setTransactions(prev => [...data, ...prev].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+            .select('description, date')
+            .eq('user_id', user.id)
+            .in('description', descs)
+            .in('date', dates);
+
+          const existingKeys = new Set(
+            (alreadyExist || []).map((t: any) => `${t.description}|${t.date}`)
+          );
+          const safeToInsert = newTransactionsToInsert.filter(t =>
+            !existingKeys.has(`${t.description}|${t.date}`)
+          );
+
+          if (safeToInsert.length > 0) {
+            const { data, error } = await supabase
+              .from('financial_transactions')
+              .insert(safeToInsert)
+              .select();
+
+            if (!error && data) {
+              setTransactions(prev => [...data, ...prev].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+            }
           }
         }
       }
@@ -526,18 +628,56 @@ export default function Finances() {
   };
 
   const handleDeleteTx = async (id: string) => {
+    const tx = transactions.find(t => t.id === id);
+    const isRecurring = !!tx?.category.endsWith('|recurring');
+
     setConfirmDialog({
       isOpen: true,
       title: 'Excluir Transação',
-      message: 'Tem certeza que deseja excluir esta transação?',
+      message: isRecurring
+        ? 'Esta transação é recorrente. Apagar vai DESATIVAR a recorrência: as ocorrências passadas continuam visíveis, mas o sistema para de gerar essa despesa nos próximos meses.'
+        : 'Tem certeza que deseja excluir esta transação?',
       onConfirm: async () => {
         try {
           const { data: { user } } = await supabase.auth.getUser();
           if (!user) return;
-          
+
           const { error } = await supabase.from('financial_transactions').delete().eq('id', id);
           if (error) throw error;
-          setTransactions(prev => prev.filter(t => t.id !== id));
+
+          if (isRecurring && tx) {
+            // Remove o sufixo |recurring de todas as outras ocorrências da mesma description.
+            // Sem isso, o auto-gerador em fetchData() recria a transação no próximo carregamento.
+            const { data: peers } = await supabase
+              .from('financial_transactions')
+              .select('id, category')
+              .eq('user_id', user.id)
+              .eq('description', tx.description)
+              .like('category', '%|recurring');
+
+            if (peers && peers.length > 0) {
+              await Promise.all(
+                peers.map((p: any) =>
+                  supabase
+                    .from('financial_transactions')
+                    .update({ category: p.category.replace(/\|recurring$/, '') })
+                    .eq('id', p.id)
+                )
+              );
+            }
+
+            setTransactions(prev => prev
+              .filter(t => t.id !== id)
+              .map(t =>
+                t.description === tx.description && t.category.endsWith('|recurring')
+                  ? { ...t, category: t.category.replace(/\|recurring$/, '') }
+                  : t
+              )
+            );
+          } else {
+            setTransactions(prev => prev.filter(t => t.id !== id));
+          }
+
           setOpenTxMenuId(null);
           setConfirmDialog(null);
         } catch (error) {
@@ -695,7 +835,13 @@ export default function Finances() {
   const currentMonth = new Date().getMonth();
   const currentYear = new Date().getFullYear();
   
-  const currentMonthTxs = transactions.filter(t => {
+  // Filtra apenas transações do TESOURO (sem prefixos de Vendas/CNPJ)
+  const tesouroOnly = transactions.filter((t) => {
+    const d = t.description || '';
+    return !d.includes('[Asaas]') && !d.includes('[Ticto]') && !d.includes('[Receita]') && !d.includes('[CNPJ]');
+  });
+
+  const currentMonthTxs = tesouroOnly.filter(t => {
     const d = new Date(t.date);
     return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
   });
@@ -1148,7 +1294,19 @@ export default function Finances() {
   );
 
   const renderTransactions = () => {
-    const groupedTransactions = transactions
+    // TESOURO = visão financeira pessoal. Vendas (Asaas/Ticto/Receita) e despesas
+    // CNPJ aparecem na aba VENDAS, então filtramos eles aqui pra não duplicar.
+    const tesouroTransactions = transactions.filter((tx) => {
+      const desc = tx.description || '';
+      return (
+        !desc.includes('[Asaas]') &&
+        !desc.includes('[Ticto]') &&
+        !desc.includes('[Receita]') &&
+        !desc.includes('[CNPJ]')
+      );
+    });
+
+    const groupedTransactions = tesouroTransactions
       .reduce((acc, curr) => {
         // Parse date properly to avoid timezone issues
         const [year, month, day] = curr.date.split('-');
@@ -1170,14 +1328,230 @@ export default function Finances() {
         return acc;
       }, {} as Record<string, { incomes: Transaction[], expenses: Transaction[] }>);
 
-    const renderTxTable = (txs: Transaction[], title: string, type: 'income' | 'expense') => {
+    const renderTxTable = (txs: Transaction[], title: string, type: 'income' | 'expense', monthYearKey?: string) => {
       const total = txs.reduce((sum, t) => sum + Math.abs(t.amount), 0);
-      
+
+      // Em SAÍDAS, agrupar tudo que tem prefixo [Fatura] em um dropdown único.
+      const faturaTxs = type === 'expense'
+        ? txs.filter(t => t.description.startsWith('[Fatura]'))
+        : [];
+      const regularTxs = type === 'expense'
+        ? txs.filter(t => !t.description.startsWith('[Fatura]'))
+        : txs;
+
+      const renderRow = (t: Transaction, indent: 0 | 1 | 2 = 0, parentVendor?: string) => {
+        const indentClass = indent === 1 ? 'pl-8' : indent === 2 ? 'pl-14' : '';
+        let displayDesc = t.description;
+        if (indent > 0) {
+          displayDesc = displayDesc.replace(/^\[Fatura\]\s*/, '');
+        }
+        if (indent === 2 && parentVendor && displayDesc.startsWith(parentVendor)) {
+          const rest = displayDesc.slice(parentVendor.length).trim();
+          if (rest.startsWith('-')) {
+            displayDesc = `Parcela ${rest.replace(/^-\s*/, '')}`;
+          } else {
+            displayDesc = '—';
+          }
+        }
+        return (
+          <div key={t.id} className={`grid grid-cols-12 gap-2 p-3 items-center hover:bg-surface transition-colors group text-xs ${indentClass}`}>
+            <div className="col-span-3 text-text-muted font-mono truncate">
+              {new Date(t.date + 'T12:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}
+            </div>
+            <div className="col-span-4 flex items-center gap-2 text-text-main truncate">
+              <span className={`truncate ${displayDesc === '—' ? 'text-text-muted' : ''}`}>{displayDesc}</span>
+              {t.category.endsWith('|recurring') && (
+                <span className="text-[9px] bg-accent/20 text-accent px-1 rounded-sm font-bold" title="Recorrente">R</span>
+              )}
+            </div>
+            <div className="col-span-2 font-mono truncate">
+              R${Math.abs(t.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </div>
+            <div className="col-span-2 truncate">
+              {(() => {
+                let catName = t.category;
+                let catColor = '#9CA3AF';
+                if (t.category.includes('|')) {
+                  [catName, catColor] = t.category.split('|');
+                } else {
+                  const lower = t.category.toLowerCase();
+                  if (lower === 'empresa') catColor = '#E8A0BF';
+                  else if (lower === 'sobrevivência') catColor = '#A3D9B1';
+                  else if (lower === 'lazer') catColor = '#D9B873';
+                }
+                return (
+                  <span
+                    className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium truncate max-w-full"
+                    style={{ backgroundColor: `${catColor}30`, color: catColor }}
+                  >
+                    {catName}
+                  </span>
+                );
+              })()}
+            </div>
+            <div className="col-span-1 flex items-center justify-end relative">
+              <button
+                onClick={() => setOpenTxMenuId(openTxMenuId === t.id ? null : t.id)}
+                className="text-text-muted hover:text-text-main p-1 rounded hover:bg-surface-3 transition-colors opacity-0 group-hover:opacity-100"
+              >
+                <MoreHorizontal className="w-3 h-3" />
+              </button>
+
+              {openTxMenuId === t.id && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setOpenTxMenuId(null)}></div>
+                  <div className="absolute right-6 top-0 w-28 bg-surface-2 border border-border-subtle shadow-xl z-20 py-1 rounded">
+                    <button onClick={() => { handleEditTx(t); setOpenTxMenuId(null); }} className="w-full text-left px-3 py-1.5 text-[10px] font-mono uppercase tracking-[0.1em] text-text-main hover:bg-surface-3 flex items-center gap-2">
+                      <Edit2 className="w-3 h-3" /> Editar
+                    </button>
+                    <button onClick={() => { handleDeleteTx(t.id); setOpenTxMenuId(null); }} className="w-full text-left px-3 py-1.5 text-[10px] font-mono uppercase tracking-[0.1em] text-error hover:bg-error/10 flex items-center gap-2">
+                      <Trash2 className="w-3 h-3" /> Excluir
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        );
+      };
+
+      const renderFaturaGroup = () => {
+        if (faturaTxs.length === 0 || !monthYearKey) return null;
+
+        const faturaTotal = faturaTxs.reduce((s, t) => s + Math.abs(t.amount), 0);
+        const isExpanded = expandedFaturaMonths.has(monthYearKey);
+
+        const byVendor = new Map<string, Transaction[]>();
+        faturaTxs.forEach(t => {
+          const vendor = t.description
+            .replace(/^\[Fatura\]\s*/, '')
+            .replace(/\s+-\s+\d+$/, '')
+            .trim() || 'Sem nome';
+          if (!byVendor.has(vendor)) byVendor.set(vendor, []);
+          byVendor.get(vendor)!.push(t);
+        });
+        const sortedVendors = Array.from(byVendor.entries())
+          .map(([vendor, items]) => ({
+            vendor,
+            items,
+            total: items.reduce((s, t) => s + Math.abs(t.amount), 0)
+          }))
+          .sort((a, b) => b.total - a.total);
+
+        const earliestDate = faturaTxs.reduce<string | null>((min, t) =>
+          !min || t.date < min ? t.date : min, null
+        );
+
+        const sampleCat = faturaTxs[0].category;
+        let catName = 'CASA';
+        let catColor = '#A3D9B1';
+        if (sampleCat.includes('|')) {
+          const parts = sampleCat.split('|');
+          catName = parts[0];
+          catColor = parts[1] || catColor;
+        }
+
+        return (
+          <>
+            <div
+              onClick={() => setExpandedFaturaMonths(prev => {
+                const next = new Set(prev);
+                if (next.has(monthYearKey)) next.delete(monthYearKey);
+                else next.add(monthYearKey);
+                return next;
+              })}
+              className="grid grid-cols-12 gap-2 p-3 items-center hover:bg-surface transition-colors group text-xs cursor-pointer bg-surface-3/20"
+            >
+              <div className="col-span-3 text-text-muted font-mono truncate">
+                {earliestDate && new Date(earliestDate + 'T12:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}
+              </div>
+              <div className="col-span-4 flex items-center gap-2 text-text-main truncate">
+                {isExpanded ? <ChevronDown className="w-3 h-3 flex-shrink-0" /> : <ChevronRight className="w-3 h-3 flex-shrink-0" />}
+                <span className="truncate font-bold">Fatura ({faturaTxs.length} {faturaTxs.length === 1 ? 'item' : 'itens'})</span>
+              </div>
+              <div className="col-span-2 font-mono truncate font-bold">
+                R${faturaTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+              <div className="col-span-2 truncate">
+                <span
+                  className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium truncate max-w-full"
+                  style={{ backgroundColor: `${catColor}30`, color: catColor }}
+                >
+                  {catName}
+                </span>
+              </div>
+              <div className="col-span-1"></div>
+            </div>
+
+            {isExpanded && sortedVendors.map(({ vendor, items, total: vTotal }) => {
+              const vendorKey = `${monthYearKey}::${vendor}`;
+              const isVendorExpanded = expandedFaturaVendors.has(vendorKey);
+
+              if (items.length === 1) {
+                return renderRow(items[0], 1, vendor);
+              }
+
+              const vendorEarliestDate = items.reduce<string | null>((min, t) =>
+                !min || t.date < min ? t.date : min, null
+              );
+
+              return (
+                <React.Fragment key={vendor}>
+                  <div
+                    onClick={() => setExpandedFaturaVendors(prev => {
+                      const next = new Set(prev);
+                      if (next.has(vendorKey)) next.delete(vendorKey);
+                      else next.add(vendorKey);
+                      return next;
+                    })}
+                    className="grid grid-cols-12 gap-2 p-3 items-center hover:bg-surface transition-colors group text-xs cursor-pointer pl-8"
+                  >
+                    <div className="col-span-3 text-text-muted font-mono truncate">
+                      {vendorEarliestDate && new Date(vendorEarliestDate + 'T12:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}
+                    </div>
+                    <div className="col-span-4 flex items-center gap-2 text-text-main truncate">
+                      {isVendorExpanded ? <ChevronDown className="w-3 h-3 flex-shrink-0" /> : <ChevronRight className="w-3 h-3 flex-shrink-0" />}
+                      <span className="truncate">{vendor} ({items.length} itens)</span>
+                    </div>
+                    <div className="col-span-2 font-mono truncate">
+                      R${vTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </div>
+                    <div className="col-span-2"></div>
+                    <div className="col-span-1"></div>
+                  </div>
+                  {isVendorExpanded && items.map(t => renderRow(t, 2, vendor))}
+                </React.Fragment>
+              );
+            })}
+          </>
+        );
+      };
+
       return (
         <div className="flex flex-col h-full">
-          <h4 className={`text-sm font-mono uppercase tracking-[0.1em] mb-4 ${type === 'income' ? 'text-success' : 'text-error'}`}>
-            {title}
-          </h4>
+          <div className="flex items-center justify-between mb-4 gap-2">
+            <h4 className={`text-sm font-mono uppercase tracking-[0.1em] ${type === 'income' ? 'text-success' : 'text-error'}`}>
+              {title}
+            </h4>
+            {type === 'expense' && (
+              <label
+                className={`bg-info text-bg px-3 py-1 text-[10px] font-bold uppercase tracking-[0.1em] hover:bg-info/90 transition-colors flex items-center gap-1.5 cursor-pointer ${
+                  isImportingFatura ? 'opacity-50 cursor-not-allowed' : ''
+                }`}
+                title="Importar CSV de fatura de cartão / extrato bancário (entra como CASA)"
+              >
+                <Activity className={`w-3 h-3 ${isImportingFatura ? 'animate-spin' : ''}`} />
+                {isImportingFatura ? 'Importando...' : 'Importar Fatura (CSV)'}
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  onChange={handleFaturaImport}
+                  disabled={isImportingFatura}
+                  className="hidden"
+                />
+              </label>
+            )}
+          </div>
           <div className="bg-surface-2 border border-border-subtle rounded-sm flex-1 flex flex-col">
             {/* Header */}
             <div className="grid grid-cols-12 gap-2 p-3 border-b border-border-subtle bg-surface-3/30 text-[10px] font-mono text-text-muted uppercase tracking-[0.05em]">
@@ -1187,75 +1561,19 @@ export default function Finances() {
               <div className="col-span-2">Categoria</div>
               <div className="col-span-1 text-right">Ações</div>
             </div>
-            
+
             {/* Body */}
             <div className="divide-y divide-border-subtle flex-1">
               {txs.length === 0 ? (
                 <div className="p-8 text-center text-xs font-mono text-text-muted uppercase">Nenhuma transação</div>
               ) : (
-                txs.map(t => (
-                  <div key={t.id} className="grid grid-cols-12 gap-2 p-3 items-center hover:bg-surface transition-colors group text-xs">
-                    <div className="col-span-3 text-text-muted font-mono truncate">
-                      {new Date(t.date + 'T12:00:00Z').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}
-                    </div>
-                    <div className="col-span-4 flex items-center gap-2 text-text-main truncate">
-                      <span className="truncate">{t.description}</span>
-                      {t.category.endsWith('|recurring') && (
-                        <span className="text-[9px] bg-accent/20 text-accent px-1 rounded-sm font-bold" title="Recorrente">R</span>
-                      )}
-                    </div>
-                    <div className="col-span-2 font-mono truncate">
-                      R${Math.abs(t.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </div>
-                    <div className="col-span-2 truncate">
-                      {(() => {
-                        let catName = t.category;
-                        let catColor = '#9CA3AF';
-                        if (t.category.includes('|')) {
-                          [catName, catColor] = t.category.split('|');
-                        } else {
-                          const lower = t.category.toLowerCase();
-                          if (lower === 'empresa') catColor = '#E8A0BF';
-                          else if (lower === 'sobrevivência') catColor = '#A3D9B1';
-                          else if (lower === 'lazer') catColor = '#D9B873';
-                        }
-                        return (
-                          <span 
-                            className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium truncate max-w-full"
-                            style={{ backgroundColor: `${catColor}30`, color: catColor }}
-                          >
-                            {catName}
-                          </span>
-                        );
-                      })()}
-                    </div>
-                    <div className="col-span-1 flex items-center justify-end relative">
-                      <button 
-                        onClick={() => setOpenTxMenuId(openTxMenuId === t.id ? null : t.id)} 
-                        className="text-text-muted hover:text-text-main p-1 rounded hover:bg-surface-3 transition-colors opacity-0 group-hover:opacity-100"
-                      >
-                        <MoreHorizontal className="w-3 h-3" />
-                      </button>
-                      
-                      {openTxMenuId === t.id && (
-                        <>
-                          <div className="fixed inset-0 z-10" onClick={() => setOpenTxMenuId(null)}></div>
-                          <div className="absolute right-6 top-0 w-28 bg-surface-2 border border-border-subtle shadow-xl z-20 py-1 rounded">
-                            <button onClick={() => { handleEditTx(t); setOpenTxMenuId(null); }} className="w-full text-left px-3 py-1.5 text-[10px] font-mono uppercase tracking-[0.1em] text-text-main hover:bg-surface-3 flex items-center gap-2">
-                              <Edit2 className="w-3 h-3" /> Editar
-                            </button>
-                            <button onClick={() => { handleDeleteTx(t.id); setOpenTxMenuId(null); }} className="w-full text-left px-3 py-1.5 text-[10px] font-mono uppercase tracking-[0.1em] text-error hover:bg-error/10 flex items-center gap-2">
-                              <Trash2 className="w-3 h-3" /> Excluir
-                            </button>
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                ))
+                <>
+                  {renderFaturaGroup()}
+                  {regularTxs.map(t => renderRow(t, 0))}
+                </>
               )}
             </div>
-            
+
             {/* Footer / Total */}
             <div className="p-3 border-t border-border-subtle bg-surface-3/10 flex justify-between items-center">
               <span className="text-[10px] font-mono uppercase text-text-muted">Total {title}</span>
@@ -1321,8 +1639,8 @@ export default function Finances() {
                   {isExpanded && (
                     <div className="space-y-6 animate-in fade-in slide-in-from-top-4 duration-300">
                       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-                        {renderTxTable(data.incomes, 'Entradas', 'income')}
-                        {renderTxTable(data.expenses, 'Saídas', 'expense')}
+                        {renderTxTable(data.incomes, 'Entradas', 'income', monthYear)}
+                        {renderTxTable(data.expenses, 'Saídas', 'expense', monthYear)}
                       </div>
                       
                       {/* Resumo do Mês */}

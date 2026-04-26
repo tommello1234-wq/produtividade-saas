@@ -329,6 +329,245 @@ async function startServer() {
     }
   });
 
+  // ----------------- EXPENSES (CNPJ) CSV IMPORT -----------------
+  // Aceita CSV de fatura de cartão / extrato bancário e insere como despesas.
+  // Smart grouping: se o mesmo "vendor" aparecer várias vezes, vira um grupo
+  // pai "META ADS" com subitens "META ADS - 01", "META ADS - 02"...
+  app.post("/api/expenses/import-csv", async (req, res) => {
+    try {
+      const { userId, rows, defaultCategory, prefix } = req.body || {};
+      if (!userId) return res.status(400).json({ error: 'userId obrigatório' });
+      if (!Array.isArray(rows)) return res.status(400).json({ error: 'rows precisa ser um array' });
+      if (!supabase) return res.status(500).json({ error: 'Banco não configurado' });
+
+      const category = defaultCategory || 'Outros|#9CA3AF';
+      const tag = typeof prefix === 'string' && prefix.trim() ? prefix.trim() : '[CNPJ]';
+
+      const pick = (row: any, ...keys: string[]) => {
+        for (const k of keys) {
+          if (row[k] !== undefined && row[k] !== null && String(row[k]).trim() !== '') return row[k];
+        }
+        return '';
+      };
+
+      // Normaliza nome do vendor (remove códigos de transação, asteriscos, números soltos)
+      const normalizeVendor = (raw: string): string => {
+        if (!raw) return 'Sem descrição';
+        let s = String(raw).trim();
+        // Remove sufixos comuns: *XXXXXXX, /XXXXXXX, números longos
+        s = s.replace(/\*[A-Z0-9]{4,}.*$/i, '').trim();      // FACEBK*MFGN... → FACEBK
+        s = s.replace(/\s+\d{6,}.*$/, '').trim();             // VENDOR 12345678... → VENDOR
+        s = s.replace(/\s+\/\s*.*$/, '').trim();              // VENDOR / extra → VENDOR
+        s = s.replace(/\s{2,}/g, ' ');                         // multi spaces
+        // Mapeamento de aliases conhecidos
+        const lower = s.toLowerCase();
+        const aliases: Record<string, string> = {
+          'facebk': 'Meta Ads',
+          'facebook': 'Meta Ads',
+          'fb': 'Meta Ads',
+          'meta': 'Meta Ads',
+          'google ads': 'Google Ads',
+          'google': 'Google',
+          'goog': 'Google',
+          'apple.com/bill': 'Apple',
+          'apple': 'Apple',
+          'anthropic': 'Claude',
+          'claude': 'Claude',
+          'openai': 'OpenAI',
+          'figma': 'Figma',
+          'replicate': 'Replicate',
+          'lovable': 'Lovable',
+          'vercel': 'Vercel',
+          'supabase': 'Supabase',
+          'github': 'GitHub',
+          'cursor': 'Cursor',
+          'asaas': 'Asaas',
+          'ticto': 'Ticto',
+        };
+        for (const key of Object.keys(aliases)) {
+          if (lower.includes(key)) return aliases[key];
+        }
+        // Title case do nome restante
+        return s.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+      };
+
+      // Parser de valor (R$ 47,00 / -47.00 / 47,5)
+      const parseAmount = (raw: any): number => {
+        if (typeof raw === 'number') return raw;
+        if (!raw) return 0;
+        const cleaned = String(raw).replace(/[^\d,.\-]/g, '').replace(/\.(?=\d{3})/g, '').replace(',', '.');
+        return Number(cleaned) || 0;
+      };
+
+      // Parser de data (DD/MM/YYYY ou ISO)
+      const parseDate = (raw: any): string => {
+        if (!raw) return new Date().toISOString().split('T')[0];
+        let s = String(raw).trim();
+        if (s.includes('/')) {
+          const [d, m, y] = s.split(' ')[0].split('/');
+          if (d && m && y) return `${y.length === 2 ? '20' + y : y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+        }
+        return s.split('T')[0];
+      };
+
+      // Extrai o "vendor real" da descrição lidando com padrões de refund/IOF do Nubank:
+      //   "Crédito de \"Figma\""        → vendor=Figma  (refund)
+      //   "Estorno de \"X\""             → vendor=X     (refund)
+      //   "IOF de volta de Figma"        → vendor=IOF Figma  (refund de IOF)
+      //   "IOF de \"Figma\""             → vendor=IOF Figma  (charge de IOF)
+      // Assim, uma compra e seu refund acabam com o MESMO vendor + valor → netting funciona.
+      const extractVendor = (raw: string): { vendor: string; isRefundDesc: boolean } => {
+        let s = String(raw || '').trim();
+        let isRefundDesc = false;
+        let isIof = false;
+        let m;
+        if ((m = s.match(/^(?:cr[eé]dito|estorno)\s+de\s+"?(.+?)"?$/i))) {
+          s = m[1]; isRefundDesc = true;
+        } else if ((m = s.match(/^iof\s+de\s+volta\s+de\s+(.+)$/i))) {
+          s = m[1].replace(/^"|"$/g, ''); isRefundDesc = true; isIof = true;
+        } else if ((m = s.match(/^iof\s+de\s+"?(.+?)"?$/i))) {
+          s = m[1]; isIof = true;
+        }
+        let vendor = normalizeVendor(s);
+        // IOF de X vira "IOF X" pra não bagunçar com a cobrança normal de X
+        if (isIof) vendor = `IOF ${vendor}`;
+        return { vendor, isRefundDesc };
+      };
+
+      // Parse cada linha mantendo o SINAL do valor
+      type Parsed = { vendor: string; amount: number; signedAmount: number; date: string; rawDesc: string; isRefundDesc: boolean };
+      const allRows: Parsed[] = rows
+        .map((row: any) => {
+          const rawDesc = String(
+            pick(row, 'description', 'descrição', 'descricao', 'Description', 'Descrição',
+                 'title', 'Title', 'histórico', 'historico', 'Histórico',
+                 'estabelecimento', 'Estabelecimento', 'merchant', 'Merchant',
+                 'detalhes', 'Detalhes')
+          ).trim();
+          const amountRaw = pick(row, 'amount', 'valor', 'Valor', 'Amount', 'value', 'Value');
+          const signed = parseAmount(amountRaw);
+          const { vendor, isRefundDesc } = extractVendor(rawDesc);
+          return {
+            vendor,
+            amount: Math.abs(signed),
+            signedAmount: signed,
+            date: parseDate(pick(row, 'date', 'data', 'Date', 'Data', 'dt', 'created_at')),
+            rawDesc,
+            isRefundDesc,
+          };
+        })
+        // Pula entradas inválidas
+        .filter((p: Parsed) => p.amount > 0 && p.vendor !== 'Sem descrição')
+        // Pula "Pagamento recebido" (é o pagamento da fatura anterior, não despesa)
+        .filter((p: Parsed) => !/^pagamento\s+recebido/i.test(p.rawDesc.trim()));
+
+      // Detecta charges com refund correspondente (mesmo vendor + mesmo valor abs).
+      // Marca AMBOS pra skip.
+      const skipSet = new Set<number>();
+      const positives = allRows.map((r: Parsed, i: number) => ({ r, i })).filter((x) => x.r.signedAmount > 0);
+      const negatives = allRows.map((r: Parsed, i: number) => ({ r, i })).filter((x) => x.r.signedAmount < 0);
+
+      negatives.forEach((neg) => {
+        // Procura primeiro charge positivo com mesmo vendor + valor que ainda não foi pareado
+        const match = positives.find(
+          (pos) =>
+            !skipSet.has(pos.i) &&
+            pos.r.vendor === neg.r.vendor &&
+            Math.abs(pos.r.amount - neg.r.amount) < 0.01
+        );
+        if (match) {
+          skipSet.add(match.i);
+          skipSet.add(neg.i);
+        } else {
+          // Refund órfão (sem charge correspondente) → ignora também
+          skipSet.add(neg.i);
+        }
+      });
+
+      // O que sobra são SOMENTE despesas líquidas (charges sem refund)
+      const parsed: Parsed[] = allRows.filter((_: Parsed, i: number) => !skipSet.has(i));
+
+      // Busca despesas existentes pra dedup (por hash composto vendor+amount+date)
+      const { data: existing } = await supabase
+        .from('financial_transactions')
+        .select('description, amount, date')
+        .eq('user_id', userId)
+        .like('description', `%${tag}%`);
+
+      const existingHashes = new Set(
+        (existing || []).map((tx: any) => {
+          const desc = tx.description.replace(`${tag} `, '').split(' - ')[0];
+          return `${desc}_${Math.abs(Number(tx.amount)).toFixed(2)}_${tx.date}`;
+        })
+      );
+
+      // Agrupa por vendor pra detectar quando precisa subitens
+      const byVendor = new Map<string, Parsed[]>();
+      parsed.forEach((p: Parsed) => {
+        if (!byVendor.has(p.vendor)) byVendor.set(p.vendor, []);
+        byVendor.get(p.vendor)!.push(p);
+      });
+
+      const newTxs: any[] = [];
+      let skipped = 0;
+
+      byVendor.forEach((entries: Parsed[], vendor: string) => {
+        if (entries.length === 1) {
+          // Item único → "[CNPJ] VENDOR" sem sufixo
+          const e = entries[0];
+          const hash = `${vendor}_${e.amount.toFixed(2)}_${e.date}`;
+          if (existingHashes.has(hash)) { skipped++; return; }
+          newTxs.push({
+            user_id: userId,
+            description: `${tag} ${vendor}`,
+            category,
+            amount: e.amount,
+            type: 'expense',
+            date: e.date,
+          });
+        } else {
+          // Múltiplos → "[CNPJ] VENDOR - 01", "VENDOR - 02"... (vira grupo na UI)
+          // Ordena por data crescente pra numeração fazer sentido
+          const sorted = [...entries].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+          sorted.forEach((e: Parsed, idx: number) => {
+            const hash = `${vendor}_${e.amount.toFixed(2)}_${e.date}`;
+            if (existingHashes.has(hash)) { skipped++; return; }
+            const num = String(idx + 1).padStart(2, '0');
+            newTxs.push({
+              user_id: userId,
+              description: `${tag} ${vendor} - ${num}`,
+              category,
+              amount: e.amount,
+              type: 'expense',
+              date: e.date,
+            });
+          });
+        }
+      });
+
+      if (newTxs.length === 0) {
+        return res.json({ success: true, count: 0, skipped, message: 'Nenhuma nova despesa pra importar.' });
+      }
+
+      const { error } = await supabase.from('financial_transactions').insert(newTxs);
+      if (error) {
+        console.error('Expenses CSV import error:', error);
+        if (error.message?.includes('row-level security')) {
+          return res.status(500).json({ error: 'Erro de RLS: configure SUPABASE_SERVICE_ROLE_KEY no servidor.' });
+        }
+        return res.status(500).json({ error: 'Falha ao inserir', details: error.message });
+      }
+
+      // Conta vendors únicos importados (pra mostrar na mensagem)
+      const uniqueVendors = new Set(newTxs.map((t: any) => t.description.split(' - ')[0])).size;
+
+      res.json({ success: true, count: newTxs.length, vendors: uniqueVendors, skipped });
+    } catch (error: any) {
+      console.error('Expenses CSV import exception:', error);
+      res.status(500).json({ error: error?.message || 'Erro interno' });
+    }
+  });
+
   // Sync endpoint for historical Asaas data
   app.post("/api/asaas/sync", async (req, res) => {
     try {

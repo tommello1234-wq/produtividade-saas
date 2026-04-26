@@ -19,6 +19,7 @@ import {
   ReactFlowProvider,
   NodeChange,
   EdgeChange,
+  NodeResizeControl,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
@@ -100,6 +101,27 @@ const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'LR') => 
   return { nodes: newNodes, edges };
 };
 
+// BFS do root: profundidade de cada nó (root = 0, filhos diretos = 1, netos = 2, etc).
+// Usado pra dar hierarquia visual (tamanhos decrescentes em níveis mais profundos).
+const computeNodeDepths = (nodes: Node[], edges: Edge[]): Record<string, number> => {
+  const result: Record<string, number> = {};
+  const root = nodes.find((n) => n.data.isRoot);
+  if (!root) return result;
+
+  const queue: { id: string; depth: number }[] = [{ id: root.id, depth: 0 }];
+  const seen = new Set<string>();
+  while (queue.length > 0) {
+    const { id, depth } = queue.shift()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    result[id] = depth;
+    edges
+      .filter((e) => e.source === id)
+      .forEach((e) => queue.push({ id: e.target, depth: depth + 1 }));
+  }
+  return result;
+};
+
 // Compute the "branch color" for every node based on its top-level ancestor
 const computeBranchColors = (nodes: Node[], edges: Edge[]): Record<string, string> => {
   const result: Record<string, string> = {};
@@ -140,9 +162,22 @@ const EditableNode = memo(({ data, isConnectable, id }: NodeProps) => {
   const emoji = (data.emoji as string) || '';
   const url = (data.url as string) || '';
   const isBeingDragged = !!data.isBeingDragged;
+  const customWidth = typeof data.width === 'number' ? (data.width as number) : undefined;
+  const widthStyle: React.CSSProperties = customWidth ? { width: customWidth } : {};
   const dragStyle: React.CSSProperties = isBeingDragged
     ? { opacity: 0.85, boxShadow: '0 0 0 2px #FFB020, 0 0 24px rgba(255,176,32,0.45)', borderStyle: 'dashed' }
     : {};
+  const handleResize = (_: any, params: { width: number; height: number }) => {
+    typeof data.onUpdateWidth === 'function' && data.onUpdateWidth(id, Math.round(params.width));
+  };
+
+  // Hierarquia visual: tamanho decrescente por depth (1 = filho direto, 2 = neto, 3+ = bisneto)
+  const depth = typeof data.depth === 'number' ? (data.depth as number) : 1;
+  const sizeProfile = depth >= 3
+    ? { minW: 160, maxW: 220, fontSize: 11, topLabel: 8, padX: 10, padBottom: 8, topPad: 6, stripeH: 2 }
+    : depth === 2
+    ? { minW: 200, maxW: 240, fontSize: 13, topLabel: 8.5, padX: 11, padBottom: 10, topPad: 7, stripeH: 2 }
+    : { minW: 220, maxW: 260, fontSize: 14, topLabel: 9, padX: 12, padBottom: 12, topPad: 8, stripeH: 3 };
 
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(data.label as string);
@@ -181,7 +216,24 @@ const EditableNode = memo(({ data, isConnectable, id }: NodeProps) => {
 
   if (isRoot) {
     return (
-      <div className="relative bg-accent text-black border border-accent min-w-[240px] group cursor-pointer transition-colors hover:brightness-105" style={dragStyle}>
+      <div
+        className={`relative bg-accent text-black border border-accent min-w-[240px] group cursor-pointer transition-colors hover:brightness-105 ${customWidth ? '' : 'max-w-[260px]'}`}
+        style={{ ...widthStyle, ...dragStyle }}
+      >
+        <NodeResizeControl
+          position="right"
+          minWidth={200}
+          maxWidth={800}
+          onResize={handleResize}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            width: 6,
+            right: -3,
+          }}
+        >
+          <div className="w-full h-full bg-black/0 group-hover:bg-black/30 transition-colors cursor-ew-resize" />
+        </NodeResizeControl>
         {/* Top mono label strip */}
         <div className="px-3 pt-1.5 text-[9px] font-mono tracking-[0.2em] uppercase opacity-80">
           // ROOT
@@ -204,7 +256,7 @@ const EditableNode = memo(({ data, isConnectable, id }: NodeProps) => {
             />
           ) : (
             <div
-              className="text-sm font-black tracking-tight uppercase flex-1 hover:bg-black/10 px-1 -mx-1 transition-colors"
+              className="text-sm font-black tracking-tight uppercase flex-1 leading-snug break-words hover:bg-black/10 px-1 -mx-1 transition-colors"
               onClick={startEditing}
               title="Clique para renomear · Duplo clique abre detalhes"
             >
@@ -251,11 +303,34 @@ const EditableNode = memo(({ data, isConnectable, id }: NodeProps) => {
 
   return (
     <div
-      className="relative bg-surface border min-w-[220px] group cursor-pointer transition-colors hover:bg-surface-2"
-      style={{ borderColor: color + 'AA', ...dragStyle }}
+      className="relative bg-surface border group cursor-pointer transition-colors hover:bg-surface-2"
+      style={{
+        borderColor: color + 'AA',
+        minWidth: sizeProfile.minW,
+        maxWidth: customWidth ? undefined : sizeProfile.maxW,
+        ...widthStyle,
+        ...dragStyle,
+      }}
     >
+      <NodeResizeControl
+        position="right"
+        minWidth={180}
+        maxWidth={800}
+        onResize={handleResize}
+        style={{
+          background: 'transparent',
+          border: 'none',
+          width: 6,
+          right: -3,
+        }}
+      >
+        <div
+          className="w-full h-full opacity-0 group-hover:opacity-100 transition-opacity cursor-ew-resize"
+          style={{ background: color }}
+        />
+      </NodeResizeControl>
       {/* Colored top stripe (branch marker) */}
-      <div className="h-[3px]" style={{ background: color }} />
+      <div style={{ background: color, height: sizeProfile.stripeH }} />
 
       <Handle
         type="target"
@@ -265,13 +340,19 @@ const EditableNode = memo(({ data, isConnectable, id }: NodeProps) => {
         style={{ background: color }}
       />
 
-      <div className="px-3 pt-2 text-[9px] font-mono tracking-[0.2em] uppercase text-text-muted flex items-center justify-between gap-2">
+      <div
+        className="font-mono tracking-[0.2em] uppercase text-text-muted flex items-center justify-between gap-2"
+        style={{ paddingLeft: sizeProfile.padX, paddingRight: sizeProfile.padX, paddingTop: sizeProfile.topPad, fontSize: sizeProfile.topLabel }}
+      >
         <span style={{ color }}>// NÓ</span>
         {data.description && <AlignLeft className="w-2.5 h-2.5" aria-label="Possui descrição" />}
       </div>
 
-      <div className="px-3 pb-3 pt-0.5 flex items-center gap-2">
-        {emoji && <span className="text-base shrink-0">{emoji}</span>}
+      <div
+        className="flex items-center gap-2"
+        style={{ paddingLeft: sizeProfile.padX, paddingRight: sizeProfile.padX, paddingBottom: sizeProfile.padBottom, paddingTop: 2 }}
+      >
+        {emoji && <span className="shrink-0" style={{ fontSize: sizeProfile.fontSize + 2 }}>{emoji}</span>}
         {isEditing ? (
           <input
             ref={inputRef}
@@ -284,11 +365,13 @@ const EditableNode = memo(({ data, isConnectable, id }: NodeProps) => {
             }}
             onClick={(e) => e.stopPropagation()}
             onMouseDown={(e) => e.stopPropagation()}
-            className="flex-1 bg-bg outline-none border border-accent px-2 py-0.5 text-sm font-semibold text-text-main leading-snug"
+            className="flex-1 bg-bg outline-none border border-accent px-2 py-0.5 font-semibold text-text-main leading-snug"
+            style={{ fontSize: sizeProfile.fontSize }}
           />
         ) : (
           <div
-            className="text-sm font-semibold text-text-main flex-1 leading-snug break-words hover:bg-surface-3 px-1 -mx-1 transition-colors"
+            className="font-semibold text-text-main flex-1 leading-snug break-words hover:bg-surface-3 px-1 -mx-1 transition-colors"
+            style={{ fontSize: sizeProfile.fontSize }}
             onClick={startEditing}
             title="Clique para renomear · Duplo clique abre detalhes"
           >
@@ -592,6 +675,7 @@ function MindMapEditorInner(props: MindMapEditorProps) {
 
   // Branch color map
   const branchColors = useMemo(() => computeBranchColors(nodes, edges), [nodes, edges]);
+  const nodeDepths = useMemo(() => computeNodeDepths(nodes, edges), [nodes, edges]);
 
   // Imperative re-layout: always snaps nodes back to auto-layout positions
   const relayout = useCallback((animate = true) => {
@@ -704,6 +788,17 @@ function MindMapEditorInner(props: MindMapEditorProps) {
       );
     },
     [setNodes, takeSnapshot]
+  );
+
+  // Width update durante drag do NodeResizer — sem snapshot por mudança (seria 1 por pixel).
+  // Snapshot é tirado no onMouseUp do react-flow naturalmente, ou pode ser ignorado pra resize.
+  const onUpdateWidth = useCallback(
+    (nodeId: string, newWidth: number) => {
+      setNodes((nds) =>
+        nds.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, width: newWidth } } : n))
+      );
+    },
+    [setNodes]
   );
 
   const duplicateSelected = useCallback(() => {
@@ -902,6 +997,8 @@ function MindMapEditorInner(props: MindMapEditorProps) {
         onAddChild,
         onToggleCollapse,
         onUpdateLabel,
+        onUpdateWidth,
+        depth: nodeDepths[node.id] ?? 0,
       },
     };
   });

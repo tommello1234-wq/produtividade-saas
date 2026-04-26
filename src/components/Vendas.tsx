@@ -17,6 +17,7 @@ export default function Vendas() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [dateFilter, setDateFilter] = useState<'all' | '7d' | '30d' | '90d' | 'this_month' | 'last_month'>('30d');
   const [expandedProducts, setExpandedProducts] = useState<Record<string, boolean>>({});
+  const [expandedExpenseMonths, setExpandedExpenseMonths] = useState<Record<string, boolean>>({});
   
   // New state for Empresa tabs
   const [activeTab, setActiveTab] = useState<'receitas' | 'despesas'>('receitas');
@@ -45,6 +46,7 @@ export default function Vendas() {
   const [syncMessage, setSyncMessage] = useState<{type: 'success' | 'error' | 'info', text: string} | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [isImportingTicto, setIsImportingTicto] = useState(false);
+  const [isImportingExpenses, setIsImportingExpenses] = useState(false);
 
   const toggleProduct = (productName: string) => {
     setExpandedProducts(prev => ({ ...prev, [productName]: !prev[productName] }));
@@ -158,6 +160,49 @@ export default function Vendas() {
       setSyncMessage({ type: 'error', text: err?.message || 'Falha ao importar CSV.' });
     } finally {
       setIsImportingTicto(false);
+      setTimeout(() => setSyncMessage(null), 6000);
+    }
+  };
+
+  // -------- Importador de CSV de DESPESAS (CNPJ) --------
+  const handleExpenseImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !userId) return;
+    setIsImportingExpenses(true);
+    setSyncMessage(null);
+    try {
+      const buffer = await file.arrayBuffer();
+      let text = new TextDecoder('utf-8').decode(buffer);
+      if (text.includes('\uFFFD')) {
+        text = new TextDecoder('iso-8859-1').decode(buffer);
+      }
+      const rows = parseCSV(text);
+      if (rows.length === 0) {
+        setSyncMessage({ type: 'error', text: 'CSV vazio ou inválido.' });
+        return;
+      }
+      const res = await fetch('/api/expenses/import-csv', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, rows }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setSyncMessage({ type: 'error', text: data.error });
+      } else if (data.count === 0) {
+        setSyncMessage({ type: 'info', text: data.message || `Nenhuma nova despesa. ${data.skipped || 0} já existiam.` });
+      } else {
+        setSyncMessage({
+          type: 'success',
+          text: `${data.count} despesas importadas em ${data.vendors} grupo(s)! ${data.skipped || 0} já existiam.`,
+        });
+        fetchData();
+      }
+    } catch (err: any) {
+      setSyncMessage({ type: 'error', text: err?.message || 'Falha ao importar CSV.' });
+    } finally {
+      setIsImportingExpenses(false);
       setTimeout(() => setSyncMessage(null), 6000);
     }
   };
@@ -497,43 +542,77 @@ export default function Vendas() {
     .map(([name, data]) => ({ name, ...data }))
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-  // Filter transactions based on selected date range
-  const filteredTxs = asaasTxs.filter(tx => {
+  // Filtro genérico de data — usado para income E expenses
+  const matchesDateFilter = (txDateStr: string) => {
     if (dateFilter === 'all') return true;
-    
-    const txDate = new Date(tx.date);
+    const txDate = new Date(txDateStr);
     const today = new Date();
-    
+
     if (dateFilter === '7d') {
       const sevenDaysAgo = new Date();
       sevenDaysAgo.setDate(today.getDate() - 7);
       return txDate >= sevenDaysAgo;
     }
-    
     if (dateFilter === '30d') {
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(today.getDate() - 30);
       return txDate >= thirtyDaysAgo;
     }
-    
     if (dateFilter === '90d') {
       const ninetyDaysAgo = new Date();
       ninetyDaysAgo.setDate(today.getDate() - 90);
       return txDate >= ninetyDaysAgo;
     }
-    
     if (dateFilter === 'this_month') {
       return txDate.getMonth() === today.getMonth() && txDate.getFullYear() === today.getFullYear();
     }
-    
     if (dateFilter === 'last_month') {
       const lastMonth = new Date();
       lastMonth.setMonth(today.getMonth() - 1);
       return txDate.getMonth() === lastMonth.getMonth() && txDate.getFullYear() === lastMonth.getFullYear();
     }
-    
     return true;
-  });
+  };
+
+  // Filter transactions based on selected date range
+  const filteredTxs = asaasTxs.filter((tx) => matchesDateFilter(tx.date));
+  // Despesas: SEM filtro de data — agrupadas por mês (cada mês colapsável separadamente)
+  // Mantemos `filteredCnpjExpenses` apenas pra compatibilidade local, mas o totalExpenses
+  // e a listagem usam o conjunto completo abaixo.
+  const filteredCnpjExpenses = cnpjExpenses;
+  const filteredGroupedExpenses = groupedExpenses;
+
+  // Despesas agrupadas POR MÊS (Março De 2026 / Abril De 2026 ...)
+  // Cada bucket mantém os "groupedExpenses" daquele mês + o total.
+  type ExpenseGroup = typeof groupedExpenses[number];
+  const expensesByMonth: { key: string; label: string; total: number; groups: ExpenseGroup[] }[] = (() => {
+    const buckets = new Map<string, { key: string; label: string; total: number; groups: ExpenseGroup[]; sortKey: number }>();
+    groupedExpenses.forEach((g) => {
+      const [y, m, d] = g.date.split('-');
+      const date = new Date(parseInt(y), parseInt(m) - 1, parseInt(d || '1'));
+      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      let label = date.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+      label = label.charAt(0).toUpperCase() + label.slice(1).replace(' de ', ' De ');
+      if (!buckets.has(key)) {
+        buckets.set(key, { key, label, total: 0, groups: [], sortKey: date.getFullYear() * 100 + date.getMonth() });
+      }
+      const b = buckets.get(key)!;
+      b.total += g.total;
+      b.groups.push(g);
+    });
+    return Array.from(buckets.values())
+      .sort((a, b) => b.sortKey - a.sortKey) // mais recente primeiro
+      .map(({ sortKey: _, ...rest }) => rest);
+  })();
+
+  // Default: mês mais recente expandido se nada foi tocado ainda
+  const isMonthExpanded = (key: string) => {
+    if (key in expandedExpenseMonths) return expandedExpenseMonths[key];
+    return key === expensesByMonth[0]?.key; // primeiro = mais recente
+  };
+  const toggleMonth = (key: string) => {
+    setExpandedExpenseMonths((prev) => ({ ...prev, [key]: !isMonthExpanded(key) }));
+  };
 
   // Group transactions by product and date to merge installments into single sales
   const groupedSalesMap = new Map<string, { id: string, description: string, amount: number, date: string, count: number, isManual: boolean, originalTxId: string }>();
@@ -674,7 +753,7 @@ export default function Vendas() {
     );
   }
 
-  const totalExpenses = cnpjExpenses.reduce((acc, curr) => acc + Math.abs(curr.amount), 0);
+  const totalExpenses = filteredCnpjExpenses.reduce((acc, curr) => acc + Math.abs(curr.amount), 0);
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
@@ -1004,33 +1083,78 @@ export default function Vendas() {
               </div>
             </div>
 
-            <button
-              onClick={() => setIsExpenseModalOpen(true)}
-              className="bg-accent text-bg px-4 py-2 text-xs font-bold uppercase tracking-[0.1em] hover:bg-accent/90 transition-colors flex items-center gap-2"
-            >
-              <Plus className="w-4 h-4" />
-              Nova Despesa
-            </button>
+            <div className="flex items-center gap-3">
+              <label
+                className={`bg-info text-bg px-4 py-2 text-xs font-bold uppercase tracking-[0.1em] hover:bg-info/90 transition-colors flex items-center gap-2 cursor-pointer ${
+                  isImportingExpenses ? 'opacity-50 cursor-not-allowed' : ''
+                }`}
+                title="Importar CSV de fatura ou extrato bancário"
+              >
+                <Activity className={`w-4 h-4 ${isImportingExpenses ? 'animate-spin' : ''}`} />
+                {isImportingExpenses ? 'Importando...' : 'Importar CSV'}
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  onChange={handleExpenseImport}
+                  disabled={isImportingExpenses}
+                  className="hidden"
+                />
+              </label>
+              <button
+                onClick={() => setIsExpenseModalOpen(true)}
+                className="bg-accent text-bg px-4 py-2 text-xs font-bold uppercase tracking-[0.1em] hover:bg-accent/90 transition-colors flex items-center gap-2"
+              >
+                <Plus className="w-4 h-4" />
+                Nova Despesa
+              </button>
+            </div>
           </div>
 
           <div className="bg-surface border border-border-subtle overflow-hidden">
             <div className="p-4 border-b border-border-subtle bg-surface-2/50 flex justify-between items-center">
               <h3 className="text-xs font-bold uppercase tracking-[0.1em] text-text-muted">Histórico de Despesas</h3>
-              <div className="text-[10px] font-mono text-text-muted">{cnpjExpenses.length} registros</div>
+              <div className="text-[10px] font-mono text-text-muted">{filteredCnpjExpenses.length} registros</div>
             </div>
-            {groupedExpenses.length === 0 ? (
+            {expensesByMonth.length === 0 ? (
               <div className="p-8 text-center text-sm font-mono text-text-muted">
-                Nenhuma despesa registrada para a empresa.
+                Nenhuma despesa registrada no período selecionado.
               </div>
             ) : (
               <div className="divide-y divide-border-subtle">
-                {groupedExpenses.map(group => {
+                {expensesByMonth.map((monthBucket) => {
+                  const isOpen = isMonthExpanded(monthBucket.key);
+                  return (
+                    <div key={monthBucket.key} className="flex flex-col">
+                      {/* Cabeçalho do mês */}
+                      <button
+                        onClick={() => toggleMonth(monthBucket.key)}
+                        className="flex items-center justify-between p-4 bg-surface-2/40 hover:bg-surface-2/60 transition-colors w-full"
+                      >
+                        <div className="flex items-center gap-3">
+                          <span className="text-text-muted">{isOpen ? '▼' : '▶'}</span>
+                          <h4 className="text-lg font-black tracking-tight text-white">{monthBucket.label}</h4>
+                          <span className="text-[10px] font-mono text-text-muted">
+                            {monthBucket.groups.length} grupo{monthBucket.groups.length !== 1 ? 's' : ''}
+                          </span>
+                        </div>
+                        <div className="text-sm font-mono font-bold text-danger">
+                          - R$ {monthBucket.total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        </div>
+                      </button>
+                      {/* Lista do mês */}
+                      {isOpen && (
+                        <div className="divide-y divide-border-subtle">
+                          {monthBucket.groups.map(group => {
                   const [catName, catColor] = group.category.split('|');
                   
                   return (
                     <div key={group.name} className="flex flex-col">
-                      <div 
-                        className={`p-4 flex items-center justify-between hover:bg-surface-2/30 transition-colors group ${group.hasSubItems ? 'cursor-pointer' : ''}`}
+                      <div
+                        className={`p-4 flex items-center justify-between hover:bg-surface-2/30 transition-colors group ${
+                          group.hasSubItems
+                            ? 'cursor-pointer bg-surface-2/20 border-l-2 border-l-accent/40 hover:border-l-accent'
+                            : 'border-l-2 border-l-transparent'
+                        }`}
                         onClick={() => { if (group.hasSubItems) toggleProduct(`exp_${group.name}`); }}
                       >
                         <div className="flex items-center gap-4 min-w-0">
@@ -1058,29 +1182,27 @@ export default function Vendas() {
                             </div>
                           </div>
                         </div>
-                        <div className="text-right shrink-0 ml-4 flex items-center gap-4">
-                          <div>
-                            <div className="text-sm font-mono font-bold text-danger">
-                              - R$ {group.total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                            </div>
+                        <div className="text-right shrink-0 ml-4 flex items-center gap-3">
+                          <div className="text-sm font-mono font-bold text-danger w-32 text-right">
+                            - R$ {group.total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                           </div>
                           {!group.hasSubItems ? (
-                            <div className="flex items-center gap-1">
-                              <button 
+                            <div className="flex items-center justify-end gap-1 w-[120px]">
+                              <button
                                 onClick={(e) => { e.stopPropagation(); handleAddSubItem(group); }}
                                 className="p-2 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm transition-colors opacity-0 group-hover:opacity-100"
                                 title="Adicionar Subitem"
                               >
                                 <Plus className="w-4 h-4" />
                               </button>
-                              <button 
+                              <button
                                 onClick={(e) => { e.stopPropagation(); handleEditExpense(group.items[0]); }}
                                 className="p-2 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm transition-colors opacity-0 group-hover:opacity-100"
                                 title="Editar"
                               >
                                 <Edit2 className="w-4 h-4" />
                               </button>
-                              <button 
+                              <button
                                 onClick={(e) => { e.stopPropagation(); handleDeleteExpense(group.items[0].id); }}
                                 className="p-2 text-text-muted hover:text-danger hover:bg-danger/10 rounded-sm transition-colors opacity-0 group-hover:opacity-100"
                                 title="Excluir"
@@ -1089,8 +1211,8 @@ export default function Vendas() {
                               </button>
                             </div>
                           ) : (
-                            <div className="flex items-center gap-1">
-                              <button 
+                            <div className="flex items-center justify-end gap-1 w-[120px]">
+                              <button
                                 onClick={(e) => { e.stopPropagation(); handleAddSubItem(group); }}
                                 className="p-2 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm transition-colors opacity-0 group-hover:opacity-100"
                                 title="Adicionar Subitem"
@@ -1125,14 +1247,14 @@ export default function Vendas() {
                                     - R$ {Math.abs(tx.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                                   </div>
                                   <div className="flex items-center gap-1">
-                                    <button 
+                                    <button
                                       onClick={() => handleEditExpense(tx)}
                                       className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm transition-colors opacity-0 group-hover/sub:opacity-100"
                                       title="Editar"
                                     >
                                       <Edit2 className="w-3 h-3" />
                                     </button>
-                                    <button 
+                                    <button
                                       onClick={() => handleDeleteExpense(tx.id)}
                                       className="p-1.5 text-text-muted hover:text-danger hover:bg-danger/10 rounded-sm transition-colors opacity-0 group-hover/sub:opacity-100"
                                       title="Excluir"
@@ -1144,6 +1266,11 @@ export default function Vendas() {
                               </div>
                             );
                           })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
                         </div>
                       )}
                     </div>
