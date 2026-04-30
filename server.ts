@@ -94,17 +94,16 @@ export function createApiApp(): Express {
       const order = payload.order || payload.transaction || payload;
 
       console.log(`Received Ticto webhook for user ${userId}: status=${status}`);
-      // DIAGNOSTIC: log keys at top-level + order so we can patch the
-      // parser if Ticto changes the payload shape. Remove once stable.
-      try {
-        const topKeys = Object.keys(payload);
-        const orderKeys = order && typeof order === 'object' ? Object.keys(order) : [];
-        console.log('Ticto payload top-level keys:', topKeys.join(','));
-        console.log('Ticto payload order/transaction keys:', orderKeys.join(','));
-        // Limit full dump to 4KB to keep logs cheap
-        const dump = JSON.stringify(payload).slice(0, 4000);
-        console.log('Ticto payload (truncated):', dump);
-      } catch {}
+      // DIAGNOSTIC: persist the raw payload to webhook_debug so we can
+      // inspect the real Ticto v2 shape without fighting log truncation.
+      // Remove once the parser is confirmed.
+      if (supabase) {
+        try {
+          await supabase.from('webhook_debug').insert([{ source: 'ticto', payload }]);
+        } catch (e) {
+          console.warn('webhook_debug insert failed:', (e as any)?.message);
+        }
+      }
 
       if (!supabase) {
         console.error('Supabase is not configured. Cannot save webhook data.');
