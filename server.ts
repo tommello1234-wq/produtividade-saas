@@ -118,13 +118,75 @@ export function createApiApp(): Express {
         return res.status(401).json({ error: 'Invalid token' });
       }
 
-      // Identifica produto, valor, ID, data
-      const productName = payload.product?.name || payload.product_name || order?.product?.name || 'Venda Ticto';
-      const orderHash = order?.hash || order?.order_hash || payload.transaction_hash || payload.hash || `${Date.now()}`;
-      const amountCents = order?.amount ?? payload.amount ?? order?.value ?? 0;
-      // Ticto envia em centavos no v2.0 — converter pra reais
-      const amount = typeof amountCents === 'number' && amountCents > 1000 ? amountCents / 100 : Number(amountCents) || 0;
-      const date = (order?.date || payload.created_at || new Date().toISOString()).split('T')[0];
+      // Identifica produto, valor, ID, data — robusto a variações do payload v2 da Ticto.
+      // Estrutura observada: o produto pode vir em payload.product.name, payload.item.name,
+      // payload.offer.name, payload.product_name, ou aninhado em items[0].name.
+      const items = Array.isArray(payload.items)
+        ? payload.items
+        : Array.isArray(order?.items)
+          ? order.items
+          : [];
+      const firstItem = items[0] || {};
+
+      const offerName =
+        payload.offer?.name || order?.offer?.name || firstItem.offer?.name || firstItem.offer_name || '';
+      const baseProductName =
+        payload.product?.name ||
+        payload.product_name ||
+        order?.product?.name ||
+        order?.product_name ||
+        firstItem.product?.name ||
+        firstItem.product_name ||
+        firstItem.name ||
+        payload.item?.name ||
+        payload.item_name ||
+        '';
+      const productName = baseProductName
+        ? offerName
+          ? `${baseProductName} - ${offerName}`
+          : baseProductName
+        : 'Venda Ticto';
+
+      const orderHash =
+        order?.hash ||
+        order?.order_hash ||
+        payload.order_hash ||
+        payload.transaction_hash ||
+        payload.hash ||
+        order?.transaction_hash ||
+        `${Date.now()}`;
+
+      // Procura o valor em vários campos. Ticto v2 manda em centavos (>1000).
+      const rawAmount =
+        order?.paid_amount ??
+        payload.paid_amount ??
+        order?.amount ??
+        payload.amount ??
+        order?.value ??
+        payload.value ??
+        order?.transaction_value ??
+        payload.transaction_value ??
+        order?.gross_value ??
+        payload.gross_value ??
+        firstItem.amount ??
+        firstItem.value ??
+        firstItem.price ??
+        0;
+      const amountNum = typeof rawAmount === 'number' ? rawAmount : Number(rawAmount) || 0;
+      // Heurística: se for inteiro >= 1000 assume centavos; se já tem decimal assume reais.
+      const amount = Number.isInteger(amountNum) && amountNum >= 1000 ? amountNum / 100 : amountNum;
+
+      const date = (
+        order?.date ||
+        order?.paid_at ||
+        order?.created_at ||
+        payload.paid_at ||
+        payload.created_at ||
+        payload.date ||
+        new Date().toISOString()
+      )
+        .toString()
+        .split('T')[0];
 
       // Status que GERAM uma venda válida (entrada de dinheiro)
       const incomeStatuses = ['authorized', 'close', 'pix_paid', 'bank_slip_paid'];
