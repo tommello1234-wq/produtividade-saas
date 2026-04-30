@@ -11,7 +11,9 @@
  * The Express app is created once per cold-start and reused across
  * warm invocations of the same function instance.
  */
-import { createApiApp } from '../server';
+// Note: Node ESM in production needs explicit .js extension even when the
+// source file is .ts (TypeScript understands and resolves correctly).
+import { createApiApp } from '../server.js';
 
 const app = createApiApp();
 
