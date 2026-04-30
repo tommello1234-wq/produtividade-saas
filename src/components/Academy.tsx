@@ -4,6 +4,7 @@ import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea
 import { supabase } from '../lib/supabase';
 import { MindMapEditor } from './MindMapEditor';
 import { keepInSync, ensureFormat } from '../lib/academyConverters';
+import { createOrGetShare, updateShareData, buildShareUrl } from '../lib/share';
 
 type PropertyType = 'text' | 'number' | 'select' | 'multi-select' | 'status' | 'date' | 'person' | 'files' | 'checkbox' | 'url';
 
@@ -46,6 +47,8 @@ type AcademyNode = {
   checks?: NodeCheck[];
   viewType?: 'table' | 'mindmap';
   mindmapData?: { nodes: any[], edges: any[] };
+  /** When set, this mindmap has a public share — and any edit syncs to mindmap_shares.id = shareId */
+  shareId?: string;
 };
 
 type AcademyData = {
@@ -451,6 +454,18 @@ export default function Academy() {
         if (error) {
           console.error('Supabase save error (table might not exist):', error.message);
         }
+
+        // Sincroniza shares públicos: para cada nó com shareId, espelha o
+        // mindmapData atual em mindmap_shares (live update via Realtime).
+        const sharedNodes = (Array.isArray(data?.nodes) ? data.nodes : [])
+          .filter(n => n.shareId && n.viewType === 'mindmap' && n.mindmapData);
+        if (sharedNodes.length > 0) {
+          await Promise.all(
+            sharedNodes.map(n =>
+              updateShareData(n.shareId!, n.mindmapData!, n.title)
+            )
+          );
+        }
       } catch (error) {
         console.error('Error saving academy data:', error);
       } finally {
@@ -509,6 +524,31 @@ export default function Academy() {
       mindmapData: { nodes, edges }
     }, 'mindmap'));
   }, [selectedNodeId, updateNode]);
+
+  /**
+   * Cria (ou recupera) o link público do mindmap atualmente selecionado.
+   * Persiste o `shareId` no próprio nó da Academy para que edições futuras
+   * sincronizem automaticamente.
+   */
+  const handleShareMindMap = useCallback(async (): Promise<{ url: string }> => {
+    if (!selectedNodeId) throw new Error('Nenhum mapa selecionado');
+    const node = (Array.isArray(data?.nodes) ? data.nodes : []).find(n => n.id === selectedNodeId);
+    if (!node) throw new Error('Mapa não encontrado');
+    const mindmapData = node.mindmapData || { nodes: [], edges: [] };
+
+    const share = await createOrGetShare({
+      sourceNodeId: node.id,
+      title: node.title || 'Mapa Mental',
+      data: mindmapData,
+    });
+
+    // Persiste o shareId no nó (vai ser salvo junto na próxima upsert do academy_data)
+    if (node.shareId !== share.id) {
+      updateNode(selectedNodeId, n => ({ ...n, shareId: share.id }));
+    }
+
+    return { url: buildShareUrl(share.id) };
+  }, [selectedNodeId, data, updateNode]);
 
   // Toggle entre tabela e mapa mental — deriva o formato alvo se ainda não existir
   const setView = useCallback((targetView: 'table' | 'mindmap') => {
@@ -1531,12 +1571,13 @@ export default function Academy() {
             {/* Board or MindMap */}
             <div className="flex-1 overflow-x-auto overflow-y-hidden p-4">
               {selectedNode.viewType === 'mindmap' ? (
-                <MindMapEditor 
+                <MindMapEditor
                   key={selectedNode.id}
                   initialNodes={selectedNode.mindmapData?.nodes || []}
                   initialEdges={selectedNode.mindmapData?.edges || []}
                   onChange={handleUpdateMindMap}
                   renderNodeModal={renderMindMapNodeModal}
+                  onShare={handleShareMindMap}
                 />
               ) : (
                 <DragDropContext onDragEnd={onDragEnd}>

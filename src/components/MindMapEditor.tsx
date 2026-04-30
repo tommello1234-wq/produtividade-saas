@@ -24,6 +24,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import {
   Plus, Trash2, X, AlignLeft, Minus, Maximize2, Minimize2, Undo2, Redo2, Link as LinkIcon, Smile, Palette,
+  Share2, Copy, Check,
 } from 'lucide-react';
 import dagre from 'dagre';
 
@@ -567,11 +568,15 @@ interface MindMapEditorProps {
   initialEdges: Edge[];
   onChange: (nodes: Node[], edges: Edge[]) => void;
   renderNodeModal?: (node: Node, onClose: () => void, onSave: (data: any) => void) => React.ReactNode;
+  /** Read-only viewer mode: disables editing, hides edit toolbar, syncs from props. */
+  readOnly?: boolean;
+  /** When provided, shows a "Compartilhar" button. Returns the public URL. */
+  onShare?: () => Promise<{ url: string }>;
 }
 
 // ---------- Inner editor ----------
 function MindMapEditorInner(props: MindMapEditorProps) {
-  const { initialNodes, initialEdges, onChange } = props;
+  const { initialNodes, initialEdges, onChange, readOnly = false, onShare } = props;
   const { fitView, getIntersectingNodes } = useReactFlow();
 
   const enforcedInitialNodes = initialNodes.map((n) => (n.data.isRoot ? { ...n, deletable: false } : n));
@@ -582,6 +587,19 @@ function MindMapEditorInner(props: MindMapEditorProps) {
   const [isFullscreen, setIsFullscreen] = useState(false);
   // Used to take undo snapshot only ONCE per edit session, not per keystroke
   const editSnapshotTakenRef = useRef(false);
+
+  // Share modal state (only meaningful when onShare is provided)
+  const [shareModal, setShareModal] = useState<{ open: boolean; loading: boolean; url?: string; error?: string; copied?: boolean }>(
+    { open: false, loading: false }
+  );
+
+  // In read-only mode, sync external data updates (e.g., Realtime) into the editor.
+  // Parent must memoize initialNodes/initialEdges to avoid spurious re-syncs.
+  useEffect(() => {
+    if (!readOnly) return;
+    setNodes(initialNodes.map((n) => (n.data?.isRoot ? { ...n, deletable: false } : n)));
+    setEdges(initialEdges);
+  }, [readOnly, initialNodes, initialEdges, setNodes, setEdges]);
 
   // Always look up latest node data so the modal reflects current state mid-edit
   const editingNode = editingNodeId ? nodes.find((n) => n.id === editingNodeId) || null : null;
@@ -1078,15 +1096,17 @@ function MindMapEditorInner(props: MindMapEditorProps) {
       <ReactFlow
         nodes={nodesWithHandlers}
         edges={styledEdges}
-        onNodesChange={handleNodesChange}
-        onEdgesChange={handleEdgesChange}
-        onConnect={onConnect}
+        onNodesChange={readOnly ? undefined : handleNodesChange}
+        onEdgesChange={readOnly ? undefined : handleEdgesChange}
+        onConnect={readOnly ? undefined : onConnect}
         onNodeDoubleClick={handleNodeClick}
-        onNodeDragStart={onNodeDragStart}
-        onNodeDragStop={handleNodeDragStop}
+        onNodeDragStart={readOnly ? undefined : onNodeDragStart}
+        onNodeDragStop={readOnly ? undefined : handleNodeDragStop}
         nodeTypes={nodeTypes}
         fitView
-        nodesDraggable={true}
+        nodesDraggable={!readOnly}
+        nodesConnectable={!readOnly}
+        elementsSelectable={true}
         // Pan com drag esquerdo (padrão Figma)
         panOnDrag={true}
         panOnScroll={true}
@@ -1094,35 +1114,59 @@ function MindMapEditorInner(props: MindMapEditorProps) {
         selectionOnDrag={false}
         selectionKeyCode={'Shift'}
         selectNodesOnDrag={false}
-        multiSelectionKeyCode={['Meta', 'Control']}
-        deleteKeyCode={['Delete', 'Backspace']}
+        multiSelectionKeyCode={readOnly ? null : ['Meta', 'Control']}
+        deleteKeyCode={readOnly ? null : ['Delete', 'Backspace']}
         className="bg-bg"
         colorMode="dark"
         proOptions={{ hideAttribution: true }}
       >
         {/* Top-right toolbar */}
         <Panel position="top-right" className="flex gap-0 bg-surface/95 backdrop-blur border border-border-subtle">
-          <button
-            onClick={undo}
-            className="p-2 hover:bg-surface-2 text-text-muted hover:text-text-main transition-colors border-r border-border-subtle"
-            title="Desfazer (Ctrl+Z)"
-          >
-            <Undo2 className="w-4 h-4" />
-          </button>
-          <button
-            onClick={redo}
-            className="p-2 hover:bg-surface-2 text-text-muted hover:text-text-main transition-colors border-r border-border-subtle"
-            title="Refazer (Ctrl+Shift+Z)"
-          >
-            <Redo2 className="w-4 h-4" />
-          </button>
-          <button
-            onClick={deleteSelected}
-            className="p-2 hover:bg-error/20 text-text-muted hover:text-error transition-colors border-r border-border-subtle"
-            title="Excluir Selecionado"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
+          {!readOnly && (
+            <>
+              <button
+                onClick={undo}
+                className="p-2 hover:bg-surface-2 text-text-muted hover:text-text-main transition-colors border-r border-border-subtle"
+                title="Desfazer (Ctrl+Z)"
+              >
+                <Undo2 className="w-4 h-4" />
+              </button>
+              <button
+                onClick={redo}
+                className="p-2 hover:bg-surface-2 text-text-muted hover:text-text-main transition-colors border-r border-border-subtle"
+                title="Refazer (Ctrl+Shift+Z)"
+              >
+                <Redo2 className="w-4 h-4" />
+              </button>
+              <button
+                onClick={deleteSelected}
+                className="p-2 hover:bg-error/20 text-text-muted hover:text-error transition-colors border-r border-border-subtle"
+                title="Excluir Selecionado"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </>
+          )}
+          {!readOnly && onShare && (
+            <button
+              onClick={async () => {
+                setShareModal({ open: true, loading: true });
+                try {
+                  const { url } = await onShare();
+                  setShareModal({ open: true, loading: false, url });
+                } catch (e: any) {
+                  setShareModal({ open: true, loading: false, error: e?.message || 'Falha ao gerar link' });
+                }
+              }}
+              className="px-3 py-2 hover:bg-accent/20 text-accent transition-colors flex items-center gap-2 border-r border-border-subtle"
+              title="Compartilhar (link público em tempo real)"
+            >
+              <Share2 className="w-4 h-4" />
+              <span className="text-[10px] font-mono tracking-[0.2em] hidden sm:inline font-bold">
+                COMPARTILHAR
+              </span>
+            </button>
+          )}
           <button
             onClick={() => setIsFullscreen((v) => !v)}
             className="px-3 py-2 hover:bg-accent hover:text-black text-accent transition-colors flex items-center gap-2"
@@ -1159,6 +1203,85 @@ function MindMapEditorInner(props: MindMapEditorProps) {
         ) : (
           <NodeModal node={editingNode} onClose={() => setEditingNode(null)} onSave={saveNodeDetails} />
         ))}
+
+      {shareModal.open && (
+        <div
+          className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setShareModal({ open: false, loading: false })}
+        >
+          <div
+            className="bg-surface border border-border-subtle max-w-md w-full p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-mono tracking-[0.2em] text-accent font-bold">
+                COMPARTILHAR MAPA
+              </h2>
+              <button
+                onClick={() => setShareModal({ open: false, loading: false })}
+                className="text-text-muted hover:text-text-main"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {shareModal.loading && (
+              <div className="text-text-muted text-xs font-mono animate-pulse py-6 text-center">
+                GERANDO LINK...
+              </div>
+            )}
+
+            {shareModal.error && !shareModal.loading && (
+              <div className="text-error text-xs font-mono py-3">
+                {shareModal.error}
+              </div>
+            )}
+
+            {shareModal.url && !shareModal.loading && (
+              <>
+                <p className="text-text-muted text-xs leading-relaxed mb-4">
+                  Qualquer pessoa com esse link pode visualizar o mapa em tempo real.
+                  Atualizações que você fizer aqui aparecem no link automaticamente.
+                </p>
+                <div className="flex items-stretch border border-border-subtle bg-bg">
+                  <input
+                    readOnly
+                    value={shareModal.url}
+                    onFocus={(e) => e.currentTarget.select()}
+                    className="flex-1 px-3 py-2 bg-transparent text-text-main text-xs font-mono outline-none"
+                  />
+                  <button
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(shareModal.url!);
+                        setShareModal((s) => ({ ...s, copied: true }));
+                        setTimeout(() => setShareModal((s) => ({ ...s, copied: false })), 1500);
+                      } catch {
+                        // ignore
+                      }
+                    }}
+                    className="px-3 hover:bg-accent hover:text-black text-accent transition-colors flex items-center gap-2 border-l border-border-subtle"
+                    title="Copiar link"
+                  >
+                    {shareModal.copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                    <span className="text-[10px] font-mono tracking-[0.2em] font-bold">
+                      {shareModal.copied ? 'COPIADO' : 'COPIAR'}
+                    </span>
+                  </button>
+                </div>
+                <a
+                  href={shareModal.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-3 inline-block text-xs font-mono text-accent hover:underline"
+                >
+                  Abrir em nova aba →
+                </a>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

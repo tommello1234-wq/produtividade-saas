@@ -16,15 +16,23 @@ import Perfil from './components/Perfil';
 import SegundoCerebro from './components/SegundoCerebro';
 import SaasMetrics from './components/SaasMetrics';
 import Auth from './components/Auth';
+import SharedMindMapViewer from './components/SharedMindMapViewer';
 import { supabase } from './lib/supabase';
+import { getShareIdFromUrl } from './lib/share';
 
 export default function App() {
+  // Public share viewer: bypasses auth entirely. Computed once on mount.
+  const [shareId] = useState<string | null>(() => getShareIdFromUrl());
+
   const [session, setSession] = useState<any>(null);
   const [isTestMode, setIsTestMode] = useState(false);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('vendas'); // Default to vendas for now to show the user
 
   useEffect(() => {
+    // Skip auth setup entirely when in public-share mode
+    if (shareId) return;
+
     // Verificar sessão atual
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
@@ -39,7 +47,13 @@ export default function App() {
     });
 
     return () => subscription.unsubscribe();
-  }, []);
+  }, [shareId]);
+
+  // Short-circuit: if there's a share id in the URL, render the public viewer
+  // and skip all auth/session UI below.
+  if (shareId) {
+    return <SharedMindMapViewer shareId={shareId} />;
+  }
 
   if (loading) {
     return (
