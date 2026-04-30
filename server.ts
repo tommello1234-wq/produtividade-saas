@@ -1,5 +1,4 @@
-import express from "express";
-import { createServer as createViteServer } from "vite";
+import express, { type Express } from "express";
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -19,9 +18,16 @@ const supabase = supabaseUrl && supabaseServiceKey
     }) 
   : null;
 
-async function startServer() {
+/**
+ * Builds the Express app with all API routes.
+ * Reused by both the local dev server (server.ts standalone) and the
+ * Vercel serverless wrapper (api/[...path].ts).
+ *
+ * Does NOT attach Vite middleware nor static-file serving — those are
+ * concerns of the standalone runner only.
+ */
+export function createApiApp(): Express {
   const app = express();
-  const PORT = Number(process.env.PORT) || 8080;
 
   // Middleware to parse JSON bodies
   app.use(express.json({ limit: '20mb' }));
@@ -1003,8 +1009,22 @@ async function startServer() {
     res.status(404).json({ error: 'Endpoint disabled.' });
   });
 
-  // Vite middleware for development
+  return app;
+}
+
+/**
+ * Starts the API + Vite (or static) server locally on PORT 8080.
+ * Used for `npm run dev` and any non-serverless host. NOT used on Vercel —
+ * Vercel imports `createApiApp` from api/[...path].ts and ignores this.
+ */
+async function startStandaloneServer() {
+  const app = createApiApp();
+  const PORT = Number(process.env.PORT) || 8080;
+
+  // Vite middleware for development (HMR, transform on demand).
+  // In production-standalone, serves the static build from `dist/`.
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -1023,4 +1043,8 @@ async function startServer() {
   });
 }
 
-startServer();
+// Auto-start the standalone server only when not running on Vercel.
+// On Vercel, this file is imported by api/[...path].ts which uses createApiApp.
+if (!process.env.VERCEL) {
+  startStandaloneServer();
+}
