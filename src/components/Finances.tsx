@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { ArrowUpRight, ArrowDownRight, Plus, Wallet, TrendingUp, Target, Coins, Activity, Calendar, DollarSign, X, Trash2, ChevronDown, ChevronUp, ChevronRight, MoreHorizontal, Edit2, Check, Settings } from 'lucide-react';
 import { supabase } from '../lib/supabase';
@@ -54,6 +54,9 @@ export default function Finances() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [treasures, setTreasures] = useState<Treasure[]>([]);
+
+  // Período do gráfico Evolução Patrimonial
+  const [patrimonyPeriod, setPatrimonyPeriod] = useState<'1M' | '3M' | '6M' | '1A'>('6M');
 
   // Form states - Transaction
   const [txType, setTxType] = useState<'income'|'expense'>('expense');
@@ -869,15 +872,47 @@ export default function Finances() {
     return { ...a, color: hex };
   });
 
-  // Mock patrimony history for now
-  const patrimonyHistory = [
-    { month: 'Out', total: 42000 },
-    { month: 'Nov', total: 45500 },
-    { month: 'Dez', total: 48200 },
-    { month: 'Jan', total: 50100 },
-    { month: 'Fev', total: 51800 },
-    { month: 'Mar', total: totalPatrimony },
-  ];
+  // Patrimônio mensal real: pra cada mês na janela escolhida (1M/3M/6M/1A),
+  // calcula o saldo cumulativo de receitas - despesas até o último dia do mês,
+  // somando o valor atual dos investimentos como linha de base (o histórico
+  // de preço de ativo a gente não tem, então tratamos os ativos como
+  // constantes — é o melhor que dá sem ferro de cotação histórica).
+  const patrimonyHistory = useMemo(() => {
+    const periodMap = { '1M': 1, '3M': 3, '6M': 6, '1A': 12 };
+    const monthsBack = periodMap[patrimonyPeriod];
+
+    const assetsTotal = assets.reduce(
+      (sum, a) => sum + Number(a.qtd || 0) * Number(a.cotacao || 0),
+      0,
+    );
+
+    const sortedTxs = [...transactions].sort(
+      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+    );
+
+    const now = new Date();
+    const points: { month: string; total: number }[] = [];
+
+    for (let i = monthsBack - 1; i >= 0; i--) {
+      // Último dia do mês "now - i"
+      const endOfMonth = new Date(now.getFullYear(), now.getMonth() - i + 1, 0);
+      const cashUntil = sortedTxs
+        .filter((t) => new Date(t.date) <= endOfMonth)
+        .reduce(
+          (acc, t) =>
+            acc + (t.type === 'income' ? Number(t.amount) : -Number(t.amount)),
+          0,
+        );
+
+      const monthLabel = endOfMonth
+        .toLocaleString('pt-BR', { month: 'short' })
+        .replace('.', '')
+        .replace(/^./, (c) => c.toUpperCase());
+
+      points.push({ month: monthLabel, total: cashUntil + assetsTotal });
+    }
+    return points;
+  }, [patrimonyPeriod, transactions, assets]);
 
   const handleSync = async () => {
     setIsSyncingAsaas(true);
@@ -1227,8 +1262,16 @@ export default function Finances() {
           <div className="flex justify-between items-center mb-6">
             <div className="text-[10px] font-mono text-text-muted uppercase tracking-[0.1em]">Evolução Patrimonial</div>
             <div className="flex gap-2">
-              {['1M', '3M', '6M', '1A'].map(period => (
-                <button key={period} className={`text-[9px] font-mono px-2 py-1 border ${period === '6M' ? 'border-accent text-accent bg-accent/10' : 'border-border-subtle text-text-muted hover:border-text-muted'}`}>
+              {(['1M', '3M', '6M', '1A'] as const).map((period) => (
+                <button
+                  key={period}
+                  onClick={() => setPatrimonyPeriod(period)}
+                  className={`text-[9px] font-mono px-2 py-1 border transition-colors ${
+                    patrimonyPeriod === period
+                      ? 'border-accent text-accent bg-accent/10'
+                      : 'border-border-subtle text-text-muted hover:border-text-muted'
+                  }`}
+                >
                   {period}
                 </button>
               ))}
