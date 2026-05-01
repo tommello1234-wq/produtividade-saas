@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { LogOut } from 'lucide-react';
+import { LogOut, User } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { JarvisChat } from './JarvisChat';
 
@@ -84,17 +84,19 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
           <div className="font-black text-2xl tracking-tighter">EPIC <span className="text-accent">LIFE</span></div>
           
           <nav className="hidden xl:flex h-full">
-            {tabs.map(tab => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`px-4 h-full flex items-center text-[11px] font-mono tracking-[0.1em] uppercase transition-colors border-b-2 ${
-                  activeTab === tab.id ? 'text-accent border-accent bg-accent/5' : 'text-text-muted border-transparent hover:text-text-main hover:bg-surface'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
+            {tabs
+              .filter((tab) => tab.id !== 'perfil')
+              .map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`px-4 h-full flex items-center text-[11px] font-mono tracking-[0.1em] uppercase transition-colors border-b-2 ${
+                    activeTab === tab.id ? 'text-accent border-accent bg-accent/5' : 'text-text-muted border-transparent hover:text-text-main hover:bg-surface'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
           </nav>
         </div>
 
@@ -124,11 +126,11 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
       </header>
 
       <div className="flex flex-1 pt-16">
-        {/* Sidebar Esquerda (Indicadores de Seção) */}
+        {/* Sidebar Esquerda (Indicadores de Seção + Perfil no rodapé) */}
         <aside className="w-16 fixed left-0 top-16 bottom-0 border-r border-border-subtle bg-bg/50 flex-col items-center py-8 gap-4 z-40 hidden md:flex">
           {['01', '02', '03', '04'].map((num, i) => (
-            <div 
-              key={num} 
+            <div
+              key={num}
               className={`w-8 h-8 flex items-center justify-center font-mono text-[10px] font-bold cursor-pointer transition-all ${
                 i === 0 ? 'bg-accent text-black shadow-glow scale-110' : 'text-text-muted hover:text-text-main border border-border-subtle hover:border-accent/50'
               }`}
@@ -136,6 +138,19 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
               {num}
             </div>
           ))}
+
+          {/* Perfil — fixado no rodapé da sidebar via mt-auto */}
+          <button
+            onClick={() => setActiveTab('perfil')}
+            title="Perfil"
+            className={`mt-auto w-8 h-8 flex items-center justify-center transition-all ${
+              activeTab === 'perfil'
+                ? 'bg-accent text-black shadow-glow scale-110'
+                : 'text-text-muted hover:text-text-main border border-border-subtle hover:border-accent/50'
+            }`}
+          >
+            <User className="w-4 h-4" />
+          </button>
         </aside>
 
         {/* Navegação Mobile (Aparece apenas em telas pequenas) */}
