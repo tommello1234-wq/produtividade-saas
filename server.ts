@@ -843,6 +843,92 @@ export function createApiApp(): Express {
     }
   });
 
+  // ----------------- CRON: CONTA SIMPLES DAILY SYNC -----------------
+  // Triggered by Vercel Cron (configured in vercel.json). GET only.
+  // Authenticates the cron caller via CRON_SECRET to prevent abuse.
+  // Reads the user_id to sync from CRON_USER_ID env var (single-tenant for now).
+  app.get("/api/cron/conta-simples-sync", async (req, res) => {
+    try {
+      // Vercel cron sends Authorization: Bearer <CRON_SECRET>
+      const expectedSecret = process.env.CRON_SECRET;
+      const authHeader = req.headers.authorization || '';
+      if (expectedSecret && authHeader !== `Bearer ${expectedSecret}`) {
+        return res.status(401).json({ error: 'unauthorized' });
+      }
+
+      const userId = process.env.CRON_USER_ID;
+      if (!userId) {
+        return res.status(500).json({ error: 'CRON_USER_ID não configurado' });
+      }
+      if (!supabase) return res.status(500).json({ error: 'Banco não configurado' });
+
+      const apiKey = process.env.CS_API_KEY;
+      const apiSecret = process.env.CS_API_SECRET;
+      const env = (process.env.CS_ENV as 'production' | 'sandbox') || 'production';
+      if (!apiKey || !apiSecret) {
+        return res.status(500).json({ error: 'CS_API_KEY/SECRET ausentes' });
+      }
+
+      const { getAccessToken, listBanking, listCreditCard, mapToFinancialTransaction } =
+        await import('./src/lib/conta-simples-server.js');
+
+      // Cron puxa janela menor (7 dias) — assumindo que ele roda diário, é sobra.
+      const today = new Date();
+      const startDate = new Date(today);
+      startDate.setDate(today.getDate() - 7);
+      const fmt = (d: Date) => d.toISOString().split('T')[0];
+
+      console.log(`[ContaSimples Cron] sync ${fmt(startDate)} → ${fmt(today)}`);
+
+      const token = await getAccessToken(apiKey, apiSecret, env);
+      const [banking, cards] = await Promise.all([
+        listBanking(token, { env, startDate: fmt(startDate), endDate: fmt(today) }).catch(() => []),
+        listCreditCard(token, { env, startDate: fmt(startDate), endDate: fmt(today) }).catch(() => []),
+      ]);
+
+      const { data: existingTxs } = await supabase
+        .from('financial_transactions')
+        .select('description')
+        .eq('user_id', userId)
+        .like('description', '%[ContaSimples]%');
+
+      const existingIds = new Set(
+        (existingTxs || [])
+          .map((t: any) => {
+            const m = t.description.match(/\(ID: (\d+)\)/);
+            return m ? m[1] : null;
+          })
+          .filter(Boolean),
+      );
+
+      const allTxs = [
+        ...banking.map((tx) => ({ tx, source: 'banking' as const })),
+        ...cards.map((tx) => ({ tx, source: 'credit-card' as const })),
+      ];
+
+      const newRows: any[] = [];
+      for (const { tx, source } of allTxs) {
+        if (existingIds.has(String(tx.id))) continue;
+        const mapped = mapToFinancialTransaction(tx, userId, source);
+        if (mapped) newRows.push(mapped);
+      }
+
+      if (newRows.length > 0) {
+        const { error } = await supabase.from('financial_transactions').insert(newRows);
+        if (error) {
+          console.error('[ContaSimples Cron] insert error:', error);
+          return res.status(500).json({ error: error.message });
+        }
+      }
+
+      console.log(`[ContaSimples Cron] +${newRows.length} novas`);
+      res.json({ success: true, inserted: newRows.length, banking: banking.length, cards: cards.length });
+    } catch (error: any) {
+      console.error('[ContaSimples Cron] error:', error);
+      res.status(500).json({ error: error?.message || 'cron failed' });
+    }
+  });
+
   // SaaS metrics endpoint — fetches subscriptions + payments filtered by keyword
   app.post("/api/asaas/saas-metrics", async (req, res) => {
     try {
