@@ -94,16 +94,6 @@ export function createApiApp(): Express {
       const order = payload.order || payload.transaction || payload;
 
       console.log(`Received Ticto webhook for user ${userId}: status=${status}`);
-      // DIAGNOSTIC: persist the raw payload to webhook_debug so we can
-      // inspect the real Ticto v2 shape without fighting log truncation.
-      // Remove once the parser is confirmed.
-      if (supabase) {
-        try {
-          await supabase.from('webhook_debug').insert([{ source: 'ticto', payload }]);
-        } catch (e) {
-          console.warn('webhook_debug insert failed:', (e as any)?.message);
-        }
-      }
 
       if (!supabase) {
         console.error('Supabase is not configured. Cannot save webhook data.');
@@ -117,75 +107,45 @@ export function createApiApp(): Express {
         return res.status(401).json({ error: 'Invalid token' });
       }
 
-      // Identifica produto, valor, ID, data — robusto a variações do payload v2 da Ticto.
-      // Estrutura observada: o produto pode vir em payload.product.name, payload.item.name,
-      // payload.offer.name, payload.product_name, ou aninhado em items[0].name.
-      const items = Array.isArray(payload.items)
-        ? payload.items
-        : Array.isArray(order?.items)
-          ? order.items
-          : [];
-      const firstItem = items[0] || {};
+      // === Estrutura REAL do payload Ticto v2 (confirmada via webhook_debug) ===
+      // Top-level: status, status_date, payment_method, transaction, item, offer, ...
+      // - transaction: { hash }
+      // - item: { product_name, offer_name, amount (centavos), product_id, offer_id, ... }
+      // - offer: { name, price (centavos), is_subscription, ... }
+      // Mantém fallbacks em payload.order/product/etc. caso versões antigas voltem.
+      const item = payload.item || {};
+      const offerObj = payload.offer || {};
+      const transaction = payload.transaction || order || {};
 
-      const offerName =
-        payload.offer?.name || order?.offer?.name || firstItem.offer?.name || firstItem.offer_name || '';
-      const baseProductName =
-        payload.product?.name ||
-        payload.product_name ||
-        order?.product?.name ||
-        order?.product_name ||
-        firstItem.product?.name ||
-        firstItem.product_name ||
-        firstItem.name ||
-        payload.item?.name ||
-        payload.item_name ||
-        '';
-      const productName = baseProductName
-        ? offerName
-          ? `${baseProductName} - ${offerName}`
-          : baseProductName
-        : 'Venda Ticto';
+      const productNameRaw = item.product_name || payload.product?.name || payload.product_name || '';
+      const offerNameRaw = item.offer_name || offerObj.name || payload.offer?.name || '';
+      const productName =
+        productNameRaw && offerNameRaw
+          ? `${productNameRaw} - ${offerNameRaw}`
+          : productNameRaw || offerNameRaw || 'Venda Ticto';
 
       const orderHash =
-        order?.hash ||
-        order?.order_hash ||
+        transaction.hash ||
         payload.order_hash ||
         payload.transaction_hash ||
         payload.hash ||
-        order?.transaction_hash ||
         `${Date.now()}`;
 
-      // Procura o valor em vários campos. Ticto v2 manda em centavos (>1000).
-      const rawAmount =
-        order?.paid_amount ??
-        payload.paid_amount ??
-        order?.amount ??
-        payload.amount ??
-        order?.value ??
-        payload.value ??
-        order?.transaction_value ??
-        payload.transaction_value ??
-        order?.gross_value ??
-        payload.gross_value ??
-        firstItem.amount ??
-        firstItem.value ??
-        firstItem.price ??
-        0;
-      const amountNum = typeof rawAmount === 'number' ? rawAmount : Number(rawAmount) || 0;
-      // Heurística: se for inteiro >= 1000 assume centavos; se já tem decimal assume reais.
-      const amount = Number.isInteger(amountNum) && amountNum >= 1000 ? amountNum / 100 : amountNum;
+      // Valor: SEMPRE em centavos no v2 da Ticto. item.amount é a fonte canônica.
+      const amountCents = Number(item.amount ?? offerObj.price ?? payload.amount ?? 0) || 0;
+      const amount = amountCents >= 100 ? amountCents / 100 : amountCents;
 
-      const date = (
-        order?.date ||
-        order?.paid_at ||
-        order?.created_at ||
+      // Data: payload.status_date é a fonte canônica no v2 ("YYYY-MM-DD HH:MM:SS").
+      // Mantém fallbacks pra payloads antigos.
+      const dateRaw =
+        payload.status_date ||
+        transaction.paid_at ||
+        transaction.date ||
         payload.paid_at ||
         payload.created_at ||
         payload.date ||
-        new Date().toISOString()
-      )
-        .toString()
-        .split('T')[0];
+        new Date().toISOString();
+      const date = String(dateRaw).split(/[T ]/)[0];
 
       // Status que GERAM uma venda válida (entrada de dinheiro)
       const incomeStatuses = ['authorized', 'close', 'pix_paid', 'bank_slip_paid'];
@@ -202,6 +162,7 @@ export function createApiApp(): Express {
           amount: Math.abs(amount),
           type: 'income',
           date,
+          entity_type: 'pj',
         };
         const { error } = await supabase.from('financial_transactions').insert([newTx]);
         if (error) {
@@ -220,6 +181,7 @@ export function createApiApp(): Express {
           amount: Math.abs(amount),
           type: 'expense',
           date,
+          entity_type: 'pj',
         };
         const { error } = await supabase.from('financial_transactions').insert([newTx]);
         if (error) {
