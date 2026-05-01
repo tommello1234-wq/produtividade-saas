@@ -747,6 +747,102 @@ export function createApiApp(): Express {
     }
   });
 
+  // ----------------- CONTA SIMPLES SYNC -----------------
+  // Pulls banking + credit-card statements via OAuth2, dedups by id, and
+  // upserts into financial_transactions tagged entity_type='pj'.
+  // Body: { userId: string, days?: number (default 90) }
+  app.post("/api/conta-simples/sync", async (req, res) => {
+    try {
+      const { userId, days = 90 } = req.body || {};
+      if (!userId) return res.status(400).json({ error: 'userId obrigatório' });
+      if (!supabase) return res.status(500).json({ error: 'Banco não configurado' });
+
+      const apiKey = process.env.CS_API_KEY;
+      const apiSecret = process.env.CS_API_SECRET;
+      const env = (process.env.CS_ENV as 'production' | 'sandbox') || 'production';
+      if (!apiKey || !apiSecret) {
+        return res.status(400).json({ error: 'CS_API_KEY ou CS_API_SECRET não configurados.' });
+      }
+
+      const { getAccessToken, listBanking, listCreditCard, mapToFinancialTransaction } =
+        await import('./src/lib/conta-simples-server.js');
+
+      const today = new Date();
+      const startDate = new Date(today);
+      startDate.setDate(today.getDate() - Number(days));
+      const fmt = (d: Date) => d.toISOString().split('T')[0];
+
+      console.log(`[ContaSimples] sync ${fmt(startDate)} → ${fmt(today)} env=${env}`);
+
+      const token = await getAccessToken(apiKey, apiSecret, env);
+
+      const [banking, cards] = await Promise.all([
+        listBanking(token, { env, startDate: fmt(startDate), endDate: fmt(today) }).catch((e) => {
+          console.warn('[ContaSimples] banking falhou:', e.message);
+          return [];
+        }),
+        listCreditCard(token, { env, startDate: fmt(startDate), endDate: fmt(today) }).catch((e) => {
+          console.warn('[ContaSimples] credit-card falhou:', e.message);
+          return [];
+        }),
+      ]);
+
+      console.log(`[ContaSimples] banking=${banking.length} cards=${cards.length}`);
+
+      // Dedup: pega os IDs já gravados pra esse user via prefix [ContaSimples]
+      const { data: existingTxs } = await supabase
+        .from('financial_transactions')
+        .select('description')
+        .eq('user_id', userId)
+        .like('description', '%[ContaSimples]%');
+
+      const existingIds = new Set(
+        (existingTxs || [])
+          .map((t: any) => {
+            const m = t.description.match(/\(ID: (\d+)\)/);
+            return m ? m[1] : null;
+          })
+          .filter(Boolean),
+      );
+
+      const allTxs = [
+        ...banking.map((tx) => ({ tx, source: 'banking' as const })),
+        ...cards.map((tx) => ({ tx, source: 'credit-card' as const })),
+      ];
+
+      const newRows: any[] = [];
+      let skipped = 0;
+      for (const { tx, source } of allTxs) {
+        if (existingIds.has(String(tx.id))) {
+          skipped++;
+          continue;
+        }
+        const mapped = mapToFinancialTransaction(tx, userId, source);
+        if (mapped) newRows.push(mapped);
+      }
+
+      if (newRows.length === 0) {
+        return res.json({
+          success: true,
+          count: 0,
+          skipped,
+          message: skipped > 0 ? `Nada novo. ${skipped} já estavam no banco.` : 'Nenhuma transação no período.',
+        });
+      }
+
+      const { error } = await supabase.from('financial_transactions').insert(newRows);
+      if (error) {
+        console.error('[ContaSimples] insert error:', error);
+        return res.status(500).json({ error: 'Falha ao gravar', details: error.message });
+      }
+
+      res.json({ success: true, count: newRows.length, skipped });
+    } catch (error: any) {
+      console.error('[ContaSimples] sync error:', error);
+      res.status(500).json({ error: error?.message || 'Falha ao sincronizar Conta Simples.' });
+    }
+  });
+
   // SaaS metrics endpoint — fetches subscriptions + payments filtered by keyword
   app.post("/api/asaas/saas-metrics", async (req, res) => {
     try {

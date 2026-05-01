@@ -43,6 +43,7 @@ export default function Vendas() {
 
   // Sync state
   const [isSyncingAsaas, setIsSyncingAsaas] = useState(false);
+  const [isSyncingContaSimples, setIsSyncingContaSimples] = useState(false);
   const [syncMessage, setSyncMessage] = useState<{type: 'success' | 'error' | 'info', text: string} | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [isImportingTicto, setIsImportingTicto] = useState(false);
@@ -83,6 +84,41 @@ export default function Vendas() {
     } finally {
       setIsSyncingAsaas(false);
       setTimeout(() => setSyncMessage(null), 5000);
+    }
+  };
+
+  // Sincroniza extrato + cartão da Conta Simples (PJ).
+  // O endpoint cuida de auth OAuth, paginação e dedup.
+  const handleSyncContaSimples = async () => {
+    if (!userId) return;
+    setIsSyncingContaSimples(true);
+    setSyncMessage(null);
+    try {
+      const res = await fetch('/api/conta-simples/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, days: 90 }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setSyncMessage({ type: 'error', text: data.error });
+      } else if (data.count === 0) {
+        setSyncMessage({
+          type: 'info',
+          text: data.message || 'Nada novo do Conta Simples.',
+        });
+      } else {
+        setSyncMessage({
+          type: 'success',
+          text: `Conta Simples: ${data.count} novas transações importadas${data.skipped ? ` (${data.skipped} já existiam)` : ''}.`,
+        });
+        fetchData();
+      }
+    } catch (e) {
+      setSyncMessage({ type: 'error', text: 'Erro ao sincronizar com o Conta Simples.' });
+    } finally {
+      setIsSyncingContaSimples(false);
+      setTimeout(() => setSyncMessage(null), 6000);
     }
   };
 
@@ -797,6 +833,15 @@ export default function Vendas() {
             >
               <Activity className={`w-4 h-4 ${isSyncingAsaas ? 'animate-spin' : ''}`} />
               {isSyncingAsaas ? 'Sincronizando...' : 'Sincronizar Asaas'}
+            </button>
+            <button
+              onClick={handleSyncContaSimples}
+              disabled={isSyncingContaSimples}
+              className="bg-[#FFB020] text-bg px-4 py-2 text-xs font-bold uppercase tracking-[0.1em] hover:bg-[#FFB020]/90 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Puxa extrato bancário e fatura do cartão da Conta Simples (últimos 90 dias)"
+            >
+              <Activity className={`w-4 h-4 ${isSyncingContaSimples ? 'animate-spin' : ''}`} />
+              {isSyncingContaSimples ? 'Sincronizando...' : 'Sincronizar Conta Simples'}
             </button>
             <label
               className={`bg-info text-bg px-4 py-2 text-xs font-bold uppercase tracking-[0.1em] hover:bg-info/90 transition-colors flex items-center gap-2 cursor-pointer ${
