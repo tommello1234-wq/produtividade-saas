@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { DollarSign, Calendar, TrendingUp, Activity, Filter, Plus, X, Trash2, Edit2 } from 'lucide-react';
+import { DollarSign, Calendar, TrendingUp, Activity, Filter, Plus, X, Trash2, Edit2, RefreshCw, ChevronDown } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 interface Transaction {
@@ -48,6 +48,20 @@ export default function Vendas() {
   const [userId, setUserId] = useState<string | null>(null);
   const [isImportingTicto, setIsImportingTicto] = useState(false);
   const [isImportingExpenses, setIsImportingExpenses] = useState(false);
+  const [showSyncMenu, setShowSyncMenu] = useState(false);
+  const syncMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close sync dropdown when clicking outside
+  useEffect(() => {
+    if (!showSyncMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (syncMenuRef.current && !syncMenuRef.current.contains(e.target as Node)) {
+        setShowSyncMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showSyncMenu]);
 
   const toggleProduct = (productName: string) => {
     setExpandedProducts(prev => ({ ...prev, [productName]: !prev[productName] }));
@@ -826,39 +840,67 @@ export default function Vendas() {
                 <option value="all">Todo o Período</option>
               </select>
             </div>
-            <button
-              onClick={handleSync}
-              disabled={isSyncingAsaas}
-              className="bg-accent text-bg px-4 py-2 text-xs font-bold uppercase tracking-[0.1em] hover:bg-accent/90 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <Activity className={`w-4 h-4 ${isSyncingAsaas ? 'animate-spin' : ''}`} />
-              {isSyncingAsaas ? 'Sincronizando...' : 'Sincronizar Asaas'}
-            </button>
-            <button
-              onClick={handleSyncContaSimples}
-              disabled={isSyncingContaSimples}
-              className="bg-[#FFB020] text-bg px-4 py-2 text-xs font-bold uppercase tracking-[0.1em] hover:bg-[#FFB020]/90 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Puxa extrato bancário e fatura do cartão da Conta Simples (últimos 90 dias)"
-            >
-              <Activity className={`w-4 h-4 ${isSyncingContaSimples ? 'animate-spin' : ''}`} />
-              {isSyncingContaSimples ? 'Sincronizando...' : 'Sincronizar Conta Simples'}
-            </button>
-            <label
-              className={`bg-info text-bg px-4 py-2 text-xs font-bold uppercase tracking-[0.1em] hover:bg-info/90 transition-colors flex items-center gap-2 cursor-pointer ${
-                isImportingTicto ? 'opacity-50 cursor-not-allowed' : ''
-              }`}
-              title="Importar histórico de vendas Ticto via CSV exportado do painel"
-            >
-              <Activity className={`w-4 h-4 ${isImportingTicto ? 'animate-spin' : ''}`} />
-              {isImportingTicto ? 'Importando...' : 'Importar Ticto (CSV)'}
-              <input
-                type="file"
-                accept=".csv,text/csv"
-                onChange={handleTictoImport}
-                disabled={isImportingTicto}
-                className="hidden"
-              />
-            </label>
+            {/* Sync menu — agrupa as ações de sincronização que normalmente
+                são automáticas (webhook Asaas/Ticto, cron Conta Simples).
+                Útil só pra backfill ou forçar uma sync agora. */}
+            <div className="relative" ref={syncMenuRef}>
+              <button
+                onClick={() => setShowSyncMenu((v) => !v)}
+                disabled={isSyncingAsaas || isSyncingContaSimples || isImportingTicto}
+                className="bg-surface border border-border-subtle text-text-muted hover:text-text-main hover:bg-surface-2 px-3 py-2 text-xs font-mono tracking-[0.1em] uppercase transition-colors flex items-center gap-2 disabled:opacity-50"
+                title="Sincronizar manualmente (normalmente é automático)"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${(isSyncingAsaas || isSyncingContaSimples || isImportingTicto) ? 'animate-spin' : ''}`} />
+                Sincronizar
+                <ChevronDown className="w-3 h-3" />
+              </button>
+              {showSyncMenu && (
+                <div className="absolute right-0 mt-1 w-72 bg-surface border border-border-subtle shadow-xl z-50 py-1">
+                  <div className="px-3 py-2 text-[10px] font-mono tracking-[0.2em] text-text-muted border-b border-border-subtle">
+                    SINCRONIZAÇÕES
+                  </div>
+                  <button
+                    onClick={() => { setShowSyncMenu(false); handleSync(); }}
+                    disabled={isSyncingAsaas}
+                    className="w-full text-left px-3 py-2.5 hover:bg-surface-2 transition-colors disabled:opacity-50 group"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-text-main">Asaas</span>
+                      <span className="text-[9px] font-mono text-success">AUTO via webhook</span>
+                    </div>
+                    <div className="text-[10px] text-text-muted mt-0.5">Forçar sync (backfill histórico)</div>
+                  </button>
+                  <button
+                    onClick={() => { setShowSyncMenu(false); handleSyncContaSimples(); }}
+                    disabled={isSyncingContaSimples}
+                    className="w-full text-left px-3 py-2.5 hover:bg-surface-2 transition-colors disabled:opacity-50"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-text-main">Conta Simples</span>
+                      <span className="text-[9px] font-mono text-success">AUTO 6h da manhã</span>
+                    </div>
+                    <div className="text-[10px] text-text-muted mt-0.5">Forçar sync agora (últimos 90 dias)</div>
+                  </button>
+                  <label
+                    className={`block px-3 py-2.5 hover:bg-surface-2 transition-colors cursor-pointer ${isImportingTicto ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    onClick={() => setShowSyncMenu(false)}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-text-main">Ticto (CSV)</span>
+                      <span className="text-[9px] font-mono text-success">AUTO via webhook</span>
+                    </div>
+                    <div className="text-[10px] text-text-muted mt-0.5">Importar planilha (backfill histórico)</div>
+                    <input
+                      type="file"
+                      accept=".csv,text/csv"
+                      onChange={handleTictoImport}
+                      disabled={isImportingTicto}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+              )}
+            </div>
             <button
               onClick={() => setIsIncomeModalOpen(true)}
               className="bg-success text-bg px-4 py-2 text-xs font-bold uppercase tracking-[0.1em] hover:bg-success/90 transition-colors flex items-center gap-2"
