@@ -20,7 +20,6 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
     { id: 'acoes', label: 'AÇÕES' },
     { id: 'vendas', label: 'VENDAS' },
     { id: 'tesouro', label: 'TESOURO' },
-    { id: 'niveis', label: 'NÍVEIS' },
     { id: 'trabalho', label: 'TRABALHO' },
     { id: 'academy', label: 'ACADEMY' },
     { id: 'perfil', label: 'PERFIL' },

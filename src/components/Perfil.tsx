@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { User, Mail, Shield, Bell, Moon, Sun, Globe, LogOut, Trophy, Star, Activity, ChevronRight } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import Levels from './Levels';
 
 const LEVELS_DATA = [
   { level: 1, title: 'Despertar', xpRequired: 0 },
@@ -30,6 +31,7 @@ export default function Perfil() {
   const [totalXp, setTotalXp] = useState(0);
   const [currentLevelId, setCurrentLevelId] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [subTab, setSubTab] = useState<'perfil' | 'niveis'>('perfil');
 
   // Settings states (UI only for now)
   const [darkMode, setDarkMode] = useState(true);
@@ -104,7 +106,38 @@ export default function Perfil() {
         </div>
       </section>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      {/* Sub-tabs (Perfil | Níveis) — segue o padrão da aba Vendas */}
+      <div className="flex border-b border-border-subtle -mt-12 mb-8 overflow-x-auto hide-scrollbar">
+        <button
+          onClick={() => setSubTab('perfil')}
+          className={`px-6 py-4 text-[11px] font-mono tracking-[0.1em] uppercase transition-colors border-b-2 whitespace-nowrap ${
+            subTab === 'perfil'
+              ? 'text-accent border-accent bg-accent/5'
+              : 'text-text-muted border-transparent hover:text-text-main hover:bg-surface'
+          }`}
+        >
+          PERFIL
+        </button>
+        <button
+          onClick={() => setSubTab('niveis')}
+          className={`px-6 py-4 text-[11px] font-mono tracking-[0.1em] uppercase transition-colors border-b-2 whitespace-nowrap ${
+            subTab === 'niveis'
+              ? 'text-accent border-accent bg-accent/5'
+              : 'text-text-muted border-transparent hover:text-text-main hover:bg-surface'
+          }`}
+        >
+          NÍVEIS
+        </button>
+      </div>
+
+      {subTab === 'niveis' && (
+        <div className="animate-in fade-in duration-300">
+          <Levels />
+        </div>
+      )}
+
+      {subTab === 'perfil' && (
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 animate-in fade-in duration-300">
         {/* Left Column: User Card & Stats */}
         <div className="lg:col-span-1 space-y-8">
           {/* User Card */}
@@ -261,6 +294,7 @@ export default function Perfil() {
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 }
