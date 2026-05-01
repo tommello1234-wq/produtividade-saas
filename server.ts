@@ -100,6 +100,15 @@ export function createApiApp(): Express {
         return res.status(500).json({ error: 'Database not configured' });
       }
 
+      // Persiste payload bruto enquanto descobrimos um segundo formato (TOxxx)
+      // que não bate com a estrutura v2. Volta a remover assim que ajustarmos
+      // o parser pra cobrir os dois formatos.
+      try {
+        await supabase.from('webhook_debug').insert([{ source: 'ticto', payload }]);
+      } catch (e) {
+        console.warn('webhook_debug insert failed:', (e as any)?.message);
+      }
+
       // Validação opcional via token (Ticto envia "token" no payload em v2)
       const expectedToken = process.env.TICTO_WEBHOOK_TOKEN;
       if (expectedToken && payload.token !== expectedToken) {
