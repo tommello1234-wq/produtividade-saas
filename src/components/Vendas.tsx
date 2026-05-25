@@ -623,7 +623,8 @@ export default function Vendas() {
       groupedExpensesMonthMap.set(key, { month, mainDesc, total: 0, count: 0, category: tx.category, date: tx.date, items: [], hasSubItems: isSubItem });
     }
     const group = groupedExpensesMonthMap.get(key)!;
-    group.total += Math.abs(tx.amount);
+    // Soma com SINAL: estornos têm amount negativo e subtraem do total da despesa
+    group.total += Number(tx.amount);
     group.count += 1;
     group.items.push(tx);
     if (isSubItem) group.hasSubItems = true;
@@ -910,7 +911,8 @@ export default function Vendas() {
     );
   }
 
-  const totalExpenses = filteredCnpjExpenses.reduce((acc, curr) => acc + Math.abs(curr.amount), 0);
+  // Soma com sinal: estornos (amount negativo) subtraem do total
+  const totalExpenses = filteredCnpjExpenses.reduce((acc, curr) => acc + Number(curr.amount), 0);
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
@@ -1525,7 +1527,7 @@ export default function Vendas() {
                                           </div>
                                         </div>
                                         <div className="text-right shrink-0 ml-3 flex items-center gap-2">
-                                          <div className="text-sm font-mono font-bold text-danger">- R$ {group.total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                                          <div className={`text-sm font-mono font-bold ${group.total < 0 ? 'text-success' : 'text-danger'}`}>{group.total < 0 ? '+ ' : '- '}R$ {Math.abs(group.total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
                                           {!group.hasSubItems ? (
                                             <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                               <button
@@ -1578,7 +1580,7 @@ export default function Vendas() {
                                                   <div className="text-[10px] font-mono text-text-muted">{formatDateBR(tx.date)}</div>
                                                 </div>
                                                 <div className="flex items-center gap-3">
-                                                  <div className="text-xs font-mono font-bold text-danger/80">- R$ {Math.abs(tx.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                                                  <div className={`text-xs font-mono font-bold ${Number(tx.amount) < 0 ? 'text-success/80' : 'text-danger/80'}`}>{Number(tx.amount) < 0 ? '+ ' : '- '}R$ {Math.abs(Number(tx.amount)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
                                                   <div className="flex items-center gap-1">
                                                     <button
                                                       onClick={() => handleEditExpense(tx)}

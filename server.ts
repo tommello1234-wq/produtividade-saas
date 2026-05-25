@@ -307,6 +307,26 @@ export function createApiApp(): Express {
       const normalizeVendor = (raw: string): string => {
         if (!raw) return 'Sem descrição';
         let s = String(raw).trim();
+
+        // PRIMEIRO: remove prefixos de gateway/processador de pagamento
+        // ("Asaas*X", "Asa*X", "Pg *X", "Mp *X", "Pp *X", "Ebn *X", "Dl*X", "Dm*X", "Ifd*X")
+        // Esses prefixos não são o vendor real — o vendor real vem DEPOIS do *
+        const GATEWAY_PREFIXES: RegExp[] = [
+          /^asaas\s*\*\s*/i,
+          /^asa\s*\*\s*/i,
+          /^pg\s*\*\s*/i,
+          /^mp\s*\*\s*/i,
+          /^pp\s*\*\s*/i,
+          /^pic\s*pay\s*\*\s*/i,
+          /^ebn\s*\*\s*/i,
+          /^dl\s*\*\s*/i,
+          /^dm\s*\*\s*/i,
+          /^ifd\s*\*\s*/i,
+        ];
+        for (const re of GATEWAY_PREFIXES) {
+          if (re.test(s)) { s = s.replace(re, '').trim(); break; }
+        }
+
         // Remove sufixos comuns: *XXXXXXX, /XXXXXXX, números longos
         s = s.replace(/\*[A-Z0-9]{4,}.*$/i, '').trim();      // FACEBK*MFGN... → FACEBK
         s = s.replace(/\s+\d{6,}.*$/, '').trim();             // VENDOR 12345678... → VENDOR
@@ -334,8 +354,6 @@ export function createApiApp(): Express {
           'supabase': 'Supabase',
           'github': 'GitHub',
           'cursor': 'Cursor',
-          'asaas': 'Asaas',
-          'ticto': 'Ticto',
         };
         for (const key of Object.keys(aliases)) {
           if (lower.includes(key)) return aliases[key];
@@ -414,31 +432,10 @@ export function createApiApp(): Express {
         // Pula "Pagamento recebido" (é o pagamento da fatura anterior, não despesa)
         .filter((p: Parsed) => !/^pagamento\s+recebido/i.test(p.rawDesc.trim()));
 
-      // Detecta charges com refund correspondente (mesmo vendor + mesmo valor abs).
-      // Marca AMBOS pra skip.
-      const skipSet = new Set<number>();
-      const positives = allRows.map((r: Parsed, i: number) => ({ r, i })).filter((x) => x.r.signedAmount > 0);
-      const negatives = allRows.map((r: Parsed, i: number) => ({ r, i })).filter((x) => x.r.signedAmount < 0);
-
-      negatives.forEach((neg) => {
-        // Procura primeiro charge positivo com mesmo vendor + valor que ainda não foi pareado
-        const match = positives.find(
-          (pos) =>
-            !skipSet.has(pos.i) &&
-            pos.r.vendor === neg.r.vendor &&
-            Math.abs(pos.r.amount - neg.r.amount) < 0.01
-        );
-        if (match) {
-          skipSet.add(match.i);
-          skipSet.add(neg.i);
-        } else {
-          // Refund órfão (sem charge correspondente) → ignora também
-          skipSet.add(neg.i);
-        }
-      });
-
-      // O que sobra são SOMENTE despesas líquidas (charges sem refund)
-      const parsed: Parsed[] = allRows.filter((_: Parsed, i: number) => !skipSet.has(i));
+      // Charges positivos viram despesas; refunds/estornos negativos viram ENTRADA ([Estorno])
+      // pra ficarem visíveis na aba Manuais (sem netting — usuário vê o reembolso separado).
+      const parsed: Parsed[] = allRows.filter((p: Parsed) => p.signedAmount > 0);
+      const refunds: Parsed[] = allRows.filter((p: Parsed) => p.signedAmount < 0);
 
       // Busca despesas existentes pra dedup (por hash composto vendor+amount+date)
       const { data: existing } = await supabase
@@ -496,6 +493,22 @@ export function createApiApp(): Express {
             });
           });
         }
+      });
+
+      // Refunds/estornos: inserir como despesa com valor NEGATIVO (visualmente +R$ verde)
+      // Descrição "[CNPJ] Estorno {vendor}" — separado da cobrança original.
+      refunds.forEach((r: Parsed) => {
+        const desc = `${tag} Estorno ${r.vendor}`;
+        const hash = `Estorno ${r.vendor}_${r.amount.toFixed(2)}_${r.date}`;
+        if (existingHashes.has(hash)) { skipped++; return; }
+        newTxs.push({
+          user_id: userId,
+          description: desc,
+          category,
+          amount: -r.amount, // negativo: subtrai do total de despesas
+          type: 'expense',
+          date: r.date,
+        });
       });
 
       if (newTxs.length === 0) {
