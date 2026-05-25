@@ -309,7 +309,7 @@ export default function Vendas() {
 
       if (error) throw error;
       
-      const allTxs = (data || []).filter(tx =>
+      const allTxsRaw = (data || []).filter(tx =>
         tx.description.includes('[Asaas]') ||
         tx.description.includes('[Saque Asaas]') ||
         tx.description.includes('[Ticto]') ||
@@ -319,7 +319,24 @@ export default function Vendas() {
         tx.description.includes('[CNPJ]') ||
         tx.description.includes('[Receita]')
       );
-      
+
+      // Netting de estornos: se um estorno bate por ID com a venda original, ambos somem.
+      // (assim a venda reembolsada some do dia da venda; estornos órfãos continuam visíveis)
+      const refundIds = new Set<string>();
+      allTxsRaw.forEach((tx: any) => {
+        const d = String(tx.description || '');
+        if (tx.type === 'expense' && /ESTORNO|Estorno/.test(d)) {
+          const m = d.match(/\(ID:\s*([^)]+)\)/);
+          if (m) refundIds.add(m[1].trim());
+        }
+      });
+      const allTxs = allTxsRaw.filter((tx: any) => {
+        const m = String(tx.description || '').match(/\(ID:\s*([^)]+)\)/);
+        if (!m) return true;
+        return !refundIds.has(m[1].trim());
+      });
+
+
       // Auto-generate recurring CNPJ transactions for current month
       const currentMonth = new Date().getMonth();
       const currentYear = new Date().getFullYear();
