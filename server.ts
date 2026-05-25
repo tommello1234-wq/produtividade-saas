@@ -170,6 +170,36 @@ export function createApiApp(): Express {
     return new Stripe(key);
   };
 
+  // Resolve um nome de produto melhor que "Subscription creation" lendo o invoice.
+  // Cache em memória pra não bater no Stripe múltiplas vezes pelo mesmo product_id.
+  const stripeProductCache = new Map<string, string>();
+  const resolveStripeProductName = async (stripe: Stripe, charge: Stripe.Charge | any): Promise<string> => {
+    const fallback = charge.description || charge.statement_descriptor || 'Venda Stripe';
+    try {
+      let invoice: any = charge.invoice;
+      if (!invoice) return fallback;
+      if (typeof invoice === 'string') {
+        invoice = await stripe.invoices.retrieve(invoice);
+      }
+      const line = invoice?.lines?.data?.[0];
+      if (!line) return fallback;
+      const priceProduct = line.price?.product;
+      const productId = typeof priceProduct === 'string' ? priceProduct : priceProduct?.id;
+      if (productId) {
+        if (stripeProductCache.has(productId)) return stripeProductCache.get(productId)!;
+        try {
+          const p = await stripe.products.retrieve(productId);
+          const name = p.name || fallback;
+          stripeProductCache.set(productId, name);
+          return name;
+        } catch { /* ignora e cai pra description */ }
+      }
+      return line.description || fallback;
+    } catch {
+      return fallback;
+    }
+  };
+
   app.post("/api/webhook/stripe/:userId", async (req: any, res) => {
     try {
       const { userId } = req.params;
@@ -235,7 +265,7 @@ export function createApiApp(): Express {
         const id = obj.id;
         if (await alreadyExists(id)) return res.json({ received: true, deduped: true });
         const amount = (obj.amount || (obj as any).amount_received || 0) / 100;
-        const description = (obj as any).description || (obj as any).statement_descriptor || 'Venda Stripe';
+        const description = await resolveStripeProductName(stripe, obj);
         const created = obj.created ? new Date(obj.created * 1000).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
         const newTx = {
           user_id: userId,
@@ -306,15 +336,16 @@ export function createApiApp(): Express {
         saquesCount++;
       }
 
-      // Charges (vendas)
-      for await (const c of stripe.charges.list({ limit: 100 })) {
+      // Charges (vendas) — expande invoice pra resolver nome de produto real
+      for await (const c of stripe.charges.list({ limit: 100, expand: ['data.invoice'] })) {
         if (!c.paid || c.refunded || c.status !== 'succeeded') continue;
         if (existingIds.has(c.id)) continue;
         const amount = (c.amount || 0) / 100;
         const date = c.created ? new Date(c.created * 1000).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+        const productName = await resolveStripeProductName(stripe, c);
         newTxs.push({
           user_id: userId,
-          description: `[Stripe] ${c.description || c.statement_descriptor || 'Venda Stripe'} (ID: ${c.id})`,
+          description: `[Stripe] ${productName} (ID: ${c.id})`,
           category: 'Vendas|#635BFF',
           amount: Math.abs(amount),
           type: 'income',
