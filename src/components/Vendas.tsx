@@ -1104,7 +1104,7 @@ export default function Vendas() {
               : 'text-text-muted border-transparent hover:text-text-main hover:bg-surface'
           }`}
         >
-          MANUAIS
+          CONTAS (CNPJ)
         </button>
       </div>
 

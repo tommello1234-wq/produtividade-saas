@@ -2152,7 +2152,7 @@ export default function Finances() {
             }`}
           >
             {tab === 'overview' && 'OVERVIEW'}
-            {tab === 'transactions' && 'TRANSAÇÕES'}
+            {tab === 'transactions' && 'CONTAS (CPF)'}
             {tab === 'patrimony' && 'PATRIMÔNIO'}
             {tab === 'treasures' && 'TESOUROS'}
           </button>
