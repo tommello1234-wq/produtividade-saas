@@ -1174,22 +1174,22 @@ export default function Vendas() {
                       <div className="bg-bg border border-border-subtle px-3 py-2 font-mono">
                         <div className="text-[10px] text-text-muted mb-1.5">{day}/{month}/{year}</div>
                         <div className="text-xs font-bold text-success mb-1">Total: {fmt(d.amount || 0)}</div>
-                        {d.asaas > 0 && (
-                          <div className="text-[10px] text-success/80 flex justify-between gap-3">
+                        {d.asaas !== 0 && (
+                          <div className={`text-[10px] flex justify-between gap-3 ${d.asaas < 0 ? 'text-error' : 'text-success/80'}`}>
                             <span>● Asaas</span><span>{fmt(d.asaas)}</span>
                           </div>
                         )}
-                        {d.ticto > 0 && (
-                          <div className="text-[10px] text-info flex justify-between gap-3">
-                            <span>● Ticto</span><span>{fmt(d.ticto)}</span>
+                        {d.ticto !== 0 && (
+                          <div className={`text-[10px] flex justify-between gap-3 ${d.ticto < 0 ? 'text-error' : 'text-info'}`}>
+                            <span>● Ticto{d.ticto < 0 ? ' (estorno)' : ''}</span><span>{fmt(d.ticto)}</span>
                           </div>
                         )}
-                        {d.stripe > 0 && (
-                          <div className="text-[10px] flex justify-between gap-3" style={{ color: '#635BFF' }}>
-                            <span>● Stripe</span><span>{fmt(d.stripe)}</span>
+                        {d.stripe !== 0 && (
+                          <div className="text-[10px] flex justify-between gap-3" style={{ color: d.stripe < 0 ? '#EF4444' : '#635BFF' }}>
+                            <span>● Stripe{d.stripe < 0 ? ' (estorno)' : ''}</span><span>{fmt(d.stripe)}</span>
                           </div>
                         )}
-                        {d.manual > 0 && (
+                        {d.manual !== 0 && (
                           <div className="text-[10px] text-text-muted flex justify-between gap-3">
                             <span>● Manual</span><span>{fmt(d.manual)}</span>
                           </div>
