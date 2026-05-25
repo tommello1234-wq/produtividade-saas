@@ -1630,40 +1630,76 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                           </div>
                           {m.expenses.length === 0 ? (
                             <div className="p-6 text-center text-xs font-mono text-text-muted">Sem saídas neste mês.</div>
-                          ) : (
-                            <div className="divide-y divide-border-subtle">
-                              {m.expenses.map((tx) => (
-                                <div key={tx.id} className="p-4 flex items-center justify-between hover:bg-surface-2/30 transition-colors group border-l-2 border-l-transparent hover:border-l-danger/40">
-                                  <div className="flex items-center gap-3 min-w-0">
-                                    <div className="w-9 h-9 rounded-full bg-danger/10 flex items-center justify-center border border-danger/20 shrink-0">
-                                      <DollarSign className="w-4 h-4 text-danger" />
-                                    </div>
-                                    <div className="min-w-0">
-                                      <div className="text-sm font-bold text-white truncate flex items-center gap-2" title={tx.description}>{tx.description}</div>
-                                      <div className="text-[10px] font-mono text-text-muted flex items-center gap-2">
-                                        <span>{formatDateBR(tx.date)}</span>
-                                        <span className="flex items-center gap-1">
-                                          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: catColor(tx.category) }}></span>
-                                          {catName(tx.category)}
-                                        </span>
-                                      </div>
-                                    </div>
+                          ) : (() => {
+                            const faturaTxs = m.expenses.filter(t => t.description.startsWith('[Fatura]'));
+                            const regularTxs = m.expenses.filter(t => !t.description.startsWith('[Fatura]'));
+                            const faturaTotal = faturaTxs.reduce((s, t) => s + Math.abs(Number(t.amount)), 0);
+                            const faturaKey = `fatura_${m.key}`;
+                            const faturaOpen = !!expandedMonths[faturaKey];
+                            const renderExpenseRow = (tx: Transaction, inner = false) => (
+                              <div key={tx.id} className={`${inner ? 'pl-12' : ''} p-4 flex items-center justify-between hover:bg-surface-2/30 transition-colors group border-l-2 border-l-transparent hover:border-l-danger/40`}>
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <div className="w-9 h-9 rounded-full bg-danger/10 flex items-center justify-center border border-danger/20 shrink-0">
+                                    <DollarSign className="w-4 h-4 text-danger" />
                                   </div>
-                                  <div className="text-right shrink-0 ml-3 flex items-center gap-2">
-                                    <div className="text-sm font-mono font-bold text-danger min-w-[140px] text-right">- R$ {Math.abs(Number(tx.amount)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
-                                    <div className="flex items-center justify-end gap-1 w-[80px]">
-                                      <button onClick={(e) => { e.stopPropagation(); handleEditTx(tx); }} className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity" title="Editar">
-                                        <Edit2 className="w-3.5 h-3.5" />
-                                      </button>
-                                      <button onClick={(e) => { e.stopPropagation(); handleDeleteTx(tx.id); }} className="p-1.5 text-text-muted hover:text-danger hover:bg-danger/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity" title="Excluir">
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                      </button>
+                                  <div className="min-w-0">
+                                    <div className="text-sm font-bold text-white truncate flex items-center gap-2" title={tx.description}>{inner ? tx.description.replace(/^\[Fatura\]\s*/, '') : tx.description}</div>
+                                    <div className="text-[10px] font-mono text-text-muted flex items-center gap-2">
+                                      <span>{formatDateBR(tx.date)}</span>
+                                      <span className="flex items-center gap-1">
+                                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: catColor(tx.category) }}></span>
+                                        {catName(tx.category)}
+                                      </span>
                                     </div>
                                   </div>
                                 </div>
-                              ))}
-                            </div>
-                          )}
+                                <div className="text-right shrink-0 ml-3 flex items-center gap-2">
+                                  <div className="text-sm font-mono font-bold text-danger min-w-[140px] text-right">- R$ {Math.abs(Number(tx.amount)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                                  <div className="flex items-center justify-end gap-1 w-[80px]">
+                                    <button onClick={(e) => { e.stopPropagation(); handleEditTx(tx); }} className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity" title="Editar">
+                                      <Edit2 className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button onClick={(e) => { e.stopPropagation(); handleDeleteTx(tx.id); }} className="p-1.5 text-text-muted hover:text-danger hover:bg-danger/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity" title="Excluir">
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                            return (
+                              <div className="divide-y divide-border-subtle">
+                                {faturaTxs.length > 0 && (
+                                  <>
+                                    <button
+                                      onClick={() => setExpandedMonths(prev => ({ ...prev, [faturaKey]: !faturaOpen }))}
+                                      className="w-full p-4 flex items-center justify-between hover:bg-surface-2/30 transition-colors group bg-surface-2/20 border-l-2 border-l-accent/40"
+                                    >
+                                      <div className="flex items-center gap-3 min-w-0">
+                                        <ChevronDown className={`w-4 h-4 text-text-muted transition-transform shrink-0 ${faturaOpen ? 'rotate-180 text-accent' : '-rotate-90'}`} />
+                                        <div className="w-9 h-9 rounded-full bg-danger/10 flex items-center justify-center border border-danger/20 shrink-0">
+                                          <DollarSign className="w-4 h-4 text-danger" />
+                                        </div>
+                                        <div className="min-w-0 text-left">
+                                          <div className="text-sm font-bold text-white truncate">Fatura</div>
+                                          <div className="text-[10px] font-mono text-text-muted">{faturaTxs.length} {faturaTxs.length === 1 ? 'item' : 'itens'}</div>
+                                        </div>
+                                      </div>
+                                      <div className="text-right shrink-0 ml-3 flex items-center gap-2">
+                                        <div className="text-sm font-mono font-bold text-danger min-w-[140px] text-right">- R$ {faturaTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                                        <div className="w-[80px]"></div>
+                                      </div>
+                                    </button>
+                                    {faturaOpen && (
+                                      <div className="bg-surface-2/10 divide-y divide-border-subtle/50">
+                                        {faturaTxs.map((tx) => renderExpenseRow(tx, true))}
+                                      </div>
+                                    )}
+                                  </>
+                                )}
+                                {regularTxs.map((tx) => renderExpenseRow(tx, false))}
+                              </div>
+                            );
+                          })()}
                           {m.expenses.length > 0 && (
                             <div className="p-3 border-t border-border-subtle bg-surface-2/30 flex justify-between items-center">
                               <span className="text-[10px] font-mono uppercase text-text-muted tracking-[0.1em]">Total Saídas</span>
