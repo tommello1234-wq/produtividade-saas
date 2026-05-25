@@ -1612,33 +1612,33 @@ export default function Vendas() {
                                           </div>
                                         </div>
                                         <div className="text-right shrink-0 ml-3 flex items-center gap-2">
-                                          <div className={`text-sm font-mono font-bold ${group.total < 0 ? 'text-success' : 'text-danger'}`}>{group.total < 0 ? '+ ' : '- '}R$ {Math.abs(group.total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                                          <div className={`text-sm font-mono font-bold min-w-[140px] text-right ${group.total < 0 ? 'text-success' : 'text-danger'}`}>{group.total < 0 ? '+ ' : '- '}R$ {Math.abs(group.total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
                                           {!group.hasSubItems ? (
-                                            <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <div className="flex items-center justify-end gap-1 w-[110px]">
                                               <button
                                                 onClick={(e) => { e.stopPropagation(); handleAddSubItem(group); }}
-                                                className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm"
+                                                className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity"
                                                 title="Adicionar Subitem"
                                               >
                                                 <Plus className="w-3.5 h-3.5" />
                                               </button>
                                               <button
                                                 onClick={(e) => { e.stopPropagation(); handleEditExpense(group.items[0]); }}
-                                                className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm"
+                                                className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity"
                                                 title="Editar"
                                               >
                                                 <Edit2 className="w-3.5 h-3.5" />
                                               </button>
                                               <button
                                                 onClick={(e) => { e.stopPropagation(); handleDeleteExpense(group.items[0].id); }}
-                                                className="p-1.5 text-text-muted hover:text-danger hover:bg-danger/10 rounded-sm"
+                                                className="p-1.5 text-text-muted hover:text-danger hover:bg-danger/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity"
                                                 title="Excluir"
                                               >
                                                 <Trash2 className="w-3.5 h-3.5" />
                                               </button>
                                             </div>
                                           ) : (
-                                            <div className="flex items-center justify-end gap-1">
+                                            <div className="flex items-center justify-end gap-1 w-[110px]">
                                               <button
                                                 onClick={(e) => { e.stopPropagation(); handleAddSubItem(group); }}
                                                 className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm opacity-0 group-hover:opacity-100"
