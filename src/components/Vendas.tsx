@@ -861,16 +861,16 @@ export default function Vendas() {
     
     const familyData = productFamilyMap.get(family)!;
     familyData.total += sale.amount;
-    familyData.count += 1; 
-    
+    familyData.count += sale.count; // conta transações reais, não grupos por dia
+
     const planKey = sale.isManual ? sale.id : sale.description;
-    
+
     if (!familyData.plans.has(planKey)) {
       familyData.plans.set(planKey, { total: 0, count: 0, isManual: sale.isManual, originalTxId: sale.originalTxId, date: sale.date, name: sale.description });
     }
     const planData = familyData.plans.get(planKey)!;
     planData.total += sale.amount;
-    planData.count += 1;
+    planData.count += sale.count;
   });
 
   // Data for Pie Chart (Grouped by Family)
