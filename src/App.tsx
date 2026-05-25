@@ -29,6 +29,15 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('vendas'); // Default to vendas for now to show the user
 
+  // Navegação cross-component: outras telas disparam window.dispatchEvent(new CustomEvent('app:navigate-tab', { detail: 'tesouro' }))
+  useEffect(() => {
+    const handler = (e: any) => {
+      if (typeof e?.detail === 'string') setActiveTab(e.detail);
+    };
+    window.addEventListener('app:navigate-tab', handler);
+    return () => window.removeEventListener('app:navigate-tab', handler);
+  }, []);
+
   useEffect(() => {
     // Skip auth setup entirely when in public-share mode
     if (shareId) return;

@@ -40,7 +40,15 @@ let cachedStocks: any[] | null = null;
 let cachedFiis: any[] | null = null;
 
 export default function Finances() {
-  const [activeTab, setActiveTab] = useState<SubTab>('overview');
+  const [activeTab, setActiveTab] = useState<SubTab>(() => {
+    // Permite outra tela (ex: Vendas) navegar pra "Contas (CPF)" via sessionStorage
+    const initial = typeof window !== 'undefined' ? sessionStorage.getItem('finances:initialSubTab') : null;
+    if (initial) {
+      sessionStorage.removeItem('finances:initialSubTab');
+      return initial as SubTab;
+    }
+    return 'overview';
+  });
   const [txTab, setTxTab] = useState<'income' | 'expense'>('expense');
   const [loading, setLoading] = useState(true);
   const [expandedMonths, setExpandedMonths] = useState<Record<string, boolean>>({});

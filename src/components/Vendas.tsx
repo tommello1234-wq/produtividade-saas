@@ -1106,6 +1106,15 @@ export default function Vendas() {
         >
           CONTAS (CNPJ)
         </button>
+        <button
+          onClick={() => {
+            sessionStorage.setItem('finances:initialSubTab', 'transactions');
+            window.dispatchEvent(new CustomEvent('app:navigate-tab', { detail: 'tesouro' }));
+          }}
+          className="px-6 py-4 text-[11px] font-mono tracking-[0.1em] uppercase transition-colors border-b-2 whitespace-nowrap text-text-muted border-transparent hover:text-text-main hover:bg-surface"
+        >
+          CONTAS (CPF)
+        </button>
       </div>
 
       {activeTab === 'receitas' && (
