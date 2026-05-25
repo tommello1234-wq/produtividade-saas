@@ -2459,18 +2459,10 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
     return <div className="p-12 text-center font-mono text-text-muted">CARREGANDO DADOS DO SUPABASE...</div>;
   }
 
-  // Modo embedded: só renderiza a aba de transações com layout estilo CNPJ (acordeão por mês)
-  if (embedded) {
-    return (
-      <div className="space-y-8 pb-12 relative">
-        {renderTransactionsAccordion()}
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-8 pb-12 relative">
-      {/* Hero Section */}
+      {!embedded && (
+      /* Hero Section */
       <section className="relative border-b border-border-subtle pb-8 flex flex-col md:flex-row justify-between items-start md:items-end gap-4">
         <div className="absolute inset-0 z-0 opacity-5 pointer-events-none" style={{
           backgroundImage: 'linear-gradient(rgba(255,255,255,1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,1) 1px, transparent 1px)',
@@ -2509,8 +2501,10 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
           </button>
         </div>
       </section>
+      )}
 
-      {/* Sub-Navegação Interna */}
+      {!embedded && (
+      /* Sub-Navegação Interna */
       <div className="flex border-b border-border-subtle overflow-x-auto hide-scrollbar">
         {(['overview', 'patrimony', 'treasures'] as SubTab[]).map((tab) => (
           <button
@@ -2528,13 +2522,18 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
           </button>
         ))}
       </div>
+      )}
 
       {/* Conteúdo da Tab Ativa */}
       <div className="min-h-[500px]">
-        {activeTab === 'overview' && renderOverview()}
-        {activeTab === 'transactions' && renderTransactions()}
-        {activeTab === 'patrimony' && renderPatrimony()}
-        {activeTab === 'treasures' && renderTreasures()}
+        {embedded ? renderTransactionsAccordion() : (
+          <>
+            {activeTab === 'overview' && renderOverview()}
+            {activeTab === 'transactions' && renderTransactions()}
+            {activeTab === 'patrimony' && renderPatrimony()}
+            {activeTab === 'treasures' && renderTreasures()}
+          </>
+        )}
       </div>
 
       {/* --- MODALS --- */}
