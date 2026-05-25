@@ -1429,6 +1429,260 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
     </div>
   );
 
+  // Layout estilo Vendas: 2 metric cards + Nova Transação + acordeão por mês
+  const renderTransactionsAccordion = () => {
+    const cpfTxs = transactions.filter((tx) => {
+      const d = tx.description || '';
+      return (
+        !d.includes('[Asaas]') && !d.includes('[Saque Asaas]') &&
+        !d.includes('[Ticto]') && !d.includes('[Saque Ticto]') &&
+        !d.includes('[Stripe]') && !d.includes('[Saque Stripe]') &&
+        !d.includes('[Receita]') && !d.includes('[CNPJ]')
+      );
+    });
+
+    type Bucket = { key: string; label: string; incomes: Transaction[]; expenses: Transaction[]; totalIncome: number; totalExpense: number; sortKey: number };
+    const map = new Map<string, Bucket>();
+    cpfTxs.forEach((tx) => {
+      const [y, mo, d] = tx.date.split('-');
+      const dt = new Date(parseInt(y), parseInt(mo) - 1, parseInt(d || '1'));
+      const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`;
+      if (!map.has(key)) {
+        let label = dt.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+        label = label.charAt(0).toUpperCase() + label.slice(1).replace(' de ', ' De ');
+        map.set(key, { key, label, incomes: [], expenses: [], totalIncome: 0, totalExpense: 0, sortKey: dt.getFullYear() * 100 + dt.getMonth() });
+      }
+      const b = map.get(key)!;
+      if (tx.type === 'income') {
+        b.incomes.push(tx);
+        b.totalIncome += Math.abs(Number(tx.amount));
+      } else {
+        b.expenses.push(tx);
+        b.totalExpense += Math.abs(Number(tx.amount));
+      }
+    });
+    const buckets = Array.from(map.values()).sort((a, b) => b.sortKey - a.sortKey);
+
+    const totalIn = cpfTxs.filter(t => t.type === 'income').reduce((acc, t) => acc + Math.abs(Number(t.amount)), 0);
+    const totalOut = cpfTxs.filter(t => t.type === 'expense').reduce((acc, t) => acc + Math.abs(Number(t.amount)), 0);
+
+    const formatDateBR = (iso: string) => {
+      const [y, m, d] = iso.split('-');
+      return `${d}/${m}/${y}`;
+    };
+
+    const catColor = (cat: string) => {
+      if (cat?.includes('|')) return cat.split('|')[1];
+      return '#9CA3AF';
+    };
+    const catName = (cat: string) => cat?.includes('|') ? cat.split('|')[0] : (cat || 'Outros');
+
+    const isOpen = (k: string) => !!expandedMonths[k] || (Object.keys(expandedMonths).length === 0 && k === buckets[0]?.key);
+    const toggle = (k: string) => setExpandedMonths((prev) => ({ ...prev, [k]: !isOpen(k) }));
+
+    return (
+      <div className="space-y-6 animate-in fade-in duration-500">
+        {/* Header: 2 metric cards + Nova Transação */}
+        <div className="flex flex-col xl:flex-row justify-between items-stretch xl:items-center gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 flex-1 max-w-2xl">
+            <div className="bg-surface border border-border-subtle p-6 relative overflow-hidden group">
+              <div className="absolute inset-0 bg-success/5 translate-y-[100%] group-hover:translate-y-0 transition-transform duration-500"></div>
+              <div className="relative z-10">
+                <div className="text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] mb-2 flex items-center gap-2">
+                  <DollarSign className="w-3 h-3 text-success" />
+                  Total Entradas (CPF)
+                </div>
+                <div className="text-3xl font-black tracking-[-1px] text-success">
+                  R$ {totalIn.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                </div>
+              </div>
+            </div>
+            <div className="bg-surface border border-border-subtle p-6 relative overflow-hidden group">
+              <div className="absolute inset-0 bg-danger/5 translate-y-[100%] group-hover:translate-y-0 transition-transform duration-500"></div>
+              <div className="relative z-10">
+                <div className="text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] mb-2 flex items-center gap-2">
+                  <Activity className="w-3 h-3 text-danger" />
+                  Total Saídas (CPF)
+                </div>
+                <div className="text-3xl font-black tracking-[-1px] text-danger">
+                  R$ {totalOut.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={() => {
+                setEditingTxId(null);
+                setTxAmount('');
+                setTxDesc('');
+                setTxCategory('Outros|#9CA3AF');
+                setTxIsRecurring(false);
+                setTxDate(new Date().toISOString().split('T')[0]);
+                setIsTxModalOpen(true);
+                setIsCreatingTag(false);
+              }}
+              className="bg-accent text-bg px-4 py-2 text-xs font-bold uppercase tracking-[0.1em] hover:bg-accent/90 transition-colors flex items-center gap-2"
+            >
+              <Plus className="w-4 h-4" />
+              Nova Transação
+            </button>
+          </div>
+        </div>
+
+        {buckets.length === 0 ? (
+          <div className="p-12 text-center text-sm font-mono text-text-muted uppercase border border-border-subtle bg-surface">
+            Nenhuma movimentação registrada ainda.
+          </div>
+        ) : (
+          <div className="space-y-8">
+            {buckets.map((m) => {
+              const open = isOpen(m.key);
+              const saldo = m.totalIncome - m.totalExpense;
+              return (
+                <div key={m.key} className="space-y-4">
+                  <button
+                    onClick={() => toggle(m.key)}
+                    className={`w-full bg-surface border ${open ? 'border-accent/40' : 'border-border-subtle'} p-5 hover:bg-surface-2/40 transition-all flex flex-col lg:flex-row lg:items-center gap-4 group`}
+                  >
+                    <div className="flex items-center gap-3 lg:flex-1">
+                      <ChevronDown className={`w-5 h-5 text-text-muted transition-transform duration-300 shrink-0 ${open ? 'rotate-180 text-accent' : ''}`} />
+                      <h3 className="text-2xl font-black tracking-tight text-white capitalize">{m.label}</h3>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs font-mono">
+                      <div className="flex items-center gap-2">
+                        <span className="text-success text-sm">▲</span>
+                        <span className="text-text-muted uppercase tracking-[0.05em] text-[10px]">Entradas</span>
+                        <span className="font-bold text-success">+R$ {m.totalIncome.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-danger text-sm">▼</span>
+                        <span className="text-text-muted uppercase tracking-[0.05em] text-[10px]">Saídas</span>
+                        <span className="font-bold text-danger">-R$ {m.totalExpense.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                      </div>
+                      <div className="flex items-center gap-2 lg:pl-4 lg:border-l lg:border-border-subtle">
+                        <span className="text-text-muted uppercase tracking-[0.05em] text-[10px]">Saldo</span>
+                        <span className={`text-lg font-black tracking-tight ${saldo >= 0 ? 'text-success' : 'text-danger'}`}>
+                          {saldo >= 0 ? '+' : ''}R$ {saldo.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        </span>
+                      </div>
+                    </div>
+                  </button>
+
+                  {open && (
+                    <div className="space-y-4 animate-in fade-in slide-in-from-top-4 duration-300">
+                      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                        {/* ENTRADAS */}
+                        <div className="bg-surface border border-border-subtle overflow-hidden">
+                          <div className="p-4 border-b border-border-subtle bg-surface-2/50 flex justify-between items-center">
+                            <h4 className="text-xs font-bold uppercase tracking-[0.1em] text-success flex items-center gap-2"><span>▲</span> Entradas</h4>
+                            <span className="text-[10px] font-mono text-text-muted">{m.incomes.length} {m.incomes.length === 1 ? 'item' : 'itens'}</span>
+                          </div>
+                          {m.incomes.length === 0 ? (
+                            <div className="p-6 text-center text-xs font-mono text-text-muted">Sem entradas neste mês.</div>
+                          ) : (
+                            <div className="divide-y divide-border-subtle">
+                              {m.incomes.map((tx) => (
+                                <div key={tx.id} className="p-4 flex items-center justify-between hover:bg-surface-2/30 transition-colors group border-l-2 border-l-transparent hover:border-l-success/40">
+                                  <div className="flex items-center gap-3 min-w-0">
+                                    <div className="w-9 h-9 rounded-full bg-success/10 flex items-center justify-center border border-success/20 shrink-0">
+                                      <DollarSign className="w-4 h-4 text-success" />
+                                    </div>
+                                    <div className="min-w-0">
+                                      <div className="text-sm font-bold text-white truncate flex items-center gap-2" title={tx.description}>{tx.description}</div>
+                                      <div className="text-[10px] font-mono text-text-muted flex items-center gap-2">
+                                        <span>{formatDateBR(tx.date)}</span>
+                                        <span className="flex items-center gap-1">
+                                          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: catColor(tx.category) }}></span>
+                                          {catName(tx.category)}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <div className="text-right shrink-0 ml-3 flex items-center gap-2">
+                                    <div className="text-sm font-mono font-bold text-success min-w-[140px] text-right">+ R$ {Math.abs(Number(tx.amount)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                                    <div className="flex items-center justify-end gap-1 w-[80px]">
+                                      <button onClick={(e) => { e.stopPropagation(); handleEditTx(tx); }} className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity" title="Editar">
+                                        <Edit2 className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button onClick={(e) => { e.stopPropagation(); handleDeleteTx(tx.id); }} className="p-1.5 text-text-muted hover:text-danger hover:bg-danger/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity" title="Excluir">
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {m.incomes.length > 0 && (
+                            <div className="p-3 border-t border-border-subtle bg-surface-2/30 flex justify-between items-center">
+                              <span className="text-[10px] font-mono uppercase text-text-muted tracking-[0.1em]">Total Entradas</span>
+                              <span className="text-sm font-mono font-bold text-success">+ R$ {m.totalIncome.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* SAÍDAS */}
+                        <div className="bg-surface border border-border-subtle overflow-hidden">
+                          <div className="p-4 border-b border-border-subtle bg-surface-2/50 flex justify-between items-center">
+                            <h4 className="text-xs font-bold uppercase tracking-[0.1em] text-danger flex items-center gap-2"><span>▼</span> Saídas</h4>
+                            <span className="text-[10px] font-mono text-text-muted">{m.expenses.length} {m.expenses.length === 1 ? 'item' : 'itens'}</span>
+                          </div>
+                          {m.expenses.length === 0 ? (
+                            <div className="p-6 text-center text-xs font-mono text-text-muted">Sem saídas neste mês.</div>
+                          ) : (
+                            <div className="divide-y divide-border-subtle">
+                              {m.expenses.map((tx) => (
+                                <div key={tx.id} className="p-4 flex items-center justify-between hover:bg-surface-2/30 transition-colors group border-l-2 border-l-transparent hover:border-l-danger/40">
+                                  <div className="flex items-center gap-3 min-w-0">
+                                    <div className="w-9 h-9 rounded-full bg-danger/10 flex items-center justify-center border border-danger/20 shrink-0">
+                                      <DollarSign className="w-4 h-4 text-danger" />
+                                    </div>
+                                    <div className="min-w-0">
+                                      <div className="text-sm font-bold text-white truncate flex items-center gap-2" title={tx.description}>{tx.description}</div>
+                                      <div className="text-[10px] font-mono text-text-muted flex items-center gap-2">
+                                        <span>{formatDateBR(tx.date)}</span>
+                                        <span className="flex items-center gap-1">
+                                          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: catColor(tx.category) }}></span>
+                                          {catName(tx.category)}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <div className="text-right shrink-0 ml-3 flex items-center gap-2">
+                                    <div className="text-sm font-mono font-bold text-danger min-w-[140px] text-right">- R$ {Math.abs(Number(tx.amount)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                                    <div className="flex items-center justify-end gap-1 w-[80px]">
+                                      <button onClick={(e) => { e.stopPropagation(); handleEditTx(tx); }} className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity" title="Editar">
+                                        <Edit2 className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button onClick={(e) => { e.stopPropagation(); handleDeleteTx(tx.id); }} className="p-1.5 text-text-muted hover:text-danger hover:bg-danger/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity" title="Excluir">
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {m.expenses.length > 0 && (
+                            <div className="p-3 border-t border-border-subtle bg-surface-2/30 flex justify-between items-center">
+                              <span className="text-[10px] font-mono uppercase text-text-muted tracking-[0.1em]">Total Saídas</span>
+                              <span className="text-sm font-mono font-bold text-danger">- R$ {m.totalExpense.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderTransactions = () => {
     // TESOURO = visão financeira pessoal. Vendas (Asaas/Ticto/Receita) e despesas
     // CNPJ aparecem na aba VENDAS, então filtramos eles aqui pra não duplicar.
@@ -2205,11 +2459,11 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
     return <div className="p-12 text-center font-mono text-text-muted">CARREGANDO DADOS DO SUPABASE...</div>;
   }
 
-  // Modo embedded: só renderiza a aba de transações, sem hero nem sub-tabs
+  // Modo embedded: só renderiza a aba de transações com layout estilo CNPJ (acordeão por mês)
   if (embedded) {
     return (
       <div className="space-y-8 pb-12 relative">
-        {renderTransactions()}
+        {renderTransactionsAccordion()}
       </div>
     );
   }
