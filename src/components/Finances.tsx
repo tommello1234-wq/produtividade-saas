@@ -44,15 +44,7 @@ interface FinancesProps {
 }
 
 export default function Finances({ embedded = false }: FinancesProps = {}) {
-  const [activeTab, setActiveTab] = useState<SubTab>(() => {
-    if (embedded) return 'transactions';
-    const initial = typeof window !== 'undefined' ? sessionStorage.getItem('finances:initialSubTab') : null;
-    if (initial) {
-      sessionStorage.removeItem('finances:initialSubTab');
-      return initial as SubTab;
-    }
-    return 'overview';
-  });
+  const [activeTab, setActiveTab] = useState<SubTab>(embedded ? 'transactions' : 'overview');
   const [txTab, setTxTab] = useState<'income' | 'expense'>('expense');
   const [loading, setLoading] = useState(true);
   const [expandedMonths, setExpandedMonths] = useState<Record<string, boolean>>({});
@@ -2181,18 +2173,17 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
 
       {/* Sub-Navegação Interna */}
       <div className="flex border-b border-border-subtle overflow-x-auto hide-scrollbar">
-        {(['overview', 'transactions', 'patrimony', 'treasures'] as SubTab[]).map((tab) => (
+        {(['overview', 'patrimony', 'treasures'] as SubTab[]).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
             className={`px-6 py-4 text-[11px] font-mono tracking-[0.1em] uppercase transition-colors border-b-2 whitespace-nowrap ${
-              activeTab === tab 
-                ? 'text-accent border-accent bg-accent/5' 
+              activeTab === tab
+                ? 'text-accent border-accent bg-accent/5'
                 : 'text-text-muted border-transparent hover:text-text-main hover:bg-surface'
             }`}
           >
             {tab === 'overview' && 'OVERVIEW'}
-            {tab === 'transactions' && 'CONTAS (CPF)'}
             {tab === 'patrimony' && 'PATRIMÔNIO'}
             {tab === 'treasures' && 'TESOUROS'}
           </button>
