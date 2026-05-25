@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { ArrowUpRight, ArrowDownRight, Plus, Wallet, TrendingUp, Target, Coins, Activity, Calendar, DollarSign, X, Trash2, ChevronDown, ChevronUp, ChevronRight, MoreHorizontal, Edit2, Check, Settings } from 'lucide-react';
 import { supabase } from '../lib/supabase';
@@ -1738,13 +1738,15 @@ export default function Finances() {
   };
 
   const [isUpdatingPrices, setIsUpdatingPrices] = useState(false);
+  const [lastPriceUpdate, setLastPriceUpdate] = useState<Date | null>(null);
 
-  const handleUpdatePrices = async () => {
+  // silent=true: sem alert, usado pelo auto-refresh
+  const handleUpdatePrices = async (silent: boolean = false) => {
     setIsUpdatingPrices(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
-        alert('Você está no Modo Teste. Faça login para atualizar cotações automaticamente.');
+        if (!silent) alert('Você está no Modo Teste. Faça login para atualizar cotações automaticamente.');
         setIsUpdatingPrices(false);
         return;
       }
@@ -1798,18 +1800,35 @@ export default function Finances() {
 
       if (updatedCount > 0) {
         await fetchData(); // Refresh data
-        alert(`${updatedCount} cotações atualizadas com sucesso!`);
-      } else {
+        if (!silent) alert(`${updatedCount} cotações atualizadas com sucesso!`);
+      } else if (!silent) {
         alert('Nenhuma cotação precisou ser atualizada ou tickers não encontrados.');
       }
+      setLastPriceUpdate(new Date());
 
     } catch (error) {
       console.error('Error updating prices:', error);
-      alert('Erro ao atualizar cotações.');
+      if (!silent) alert('Erro ao atualizar cotações.');
     } finally {
       setIsUpdatingPrices(false);
     }
   };
+
+  // Auto-refresh de cotações: 1ª chamada quando assets carregam, depois a cada 5 min.
+  // Roda em background sem alert.
+  const autoUpdateRanRef = useRef(false);
+  useEffect(() => {
+    if (assets.length === 0) return;
+    if (!autoUpdateRanRef.current) {
+      autoUpdateRanRef.current = true;
+      handleUpdatePrices(true);
+    }
+    const interval = setInterval(() => {
+      handleUpdatePrices(true);
+    }, 5 * 60 * 1000); // 5 min
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assets.length]);
 
   const renderPatrimony = () => {
     const totalCurrentPatrimony = assets.reduce((acc, curr) => acc + (curr.qtd * curr.cotacao), 0);
@@ -1832,7 +1851,7 @@ export default function Finances() {
           </div>
           <div className="flex gap-3">
             <button 
-              onClick={handleUpdatePrices} 
+              onClick={() => handleUpdatePrices(false)}
               disabled={isUpdatingPrices}
               className="btn-secondary flex items-center gap-2 disabled:opacity-50"
             >
