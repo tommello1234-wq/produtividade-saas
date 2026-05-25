@@ -285,6 +285,23 @@ export function createApiApp(): Express {
         console.log(`Recorded Stripe sale ${id} (R$ ${amount}) for user ${userId}`);
       }
 
+      // ============= REEMBOLSO (REFUND) =============
+      // Quando uma venda eh reembolsada na Stripe, removemos a linha original
+      // (mesma logica do netting: venda + estorno = nada aconteceu)
+      else if (event.type === 'charge.refunded') {
+        const charge = event.data.object as Stripe.Charge;
+        const { error } = await supabase
+          .from('financial_transactions')
+          .delete()
+          .eq('user_id', userId)
+          .like('description', `%(ID: ${charge.id})%`);
+        if (error) {
+          console.error('Error deleting refunded Stripe charge:', error);
+          return res.status(500).json({ error: 'Failed to delete refunded charge', details: error.message });
+        }
+        console.log(`Removed refunded Stripe charge ${charge.id} for user ${userId}`);
+      }
+
       else {
         console.log(`Stripe event not handled: ${event.type}`);
       }
@@ -339,8 +356,14 @@ export function createApiApp(): Express {
       }
 
       // Charges (vendas) — expande invoice pra resolver nome de produto real
+      // Charges reembolsados são REMOVIDOS do DB se já existirem (limpeza retroativa)
+      const refundedIds: string[] = [];
       for await (const c of stripe.charges.list({ limit: 100, expand: ['data.invoice'] })) {
-        if (!c.paid || c.refunded || c.status !== 'succeeded') continue;
+        if (c.refunded) {
+          refundedIds.push(c.id);
+          continue;
+        }
+        if (!c.paid || c.status !== 'succeeded') continue;
         if (existingIds.has(c.id)) continue;
         const amount = (c.amount || 0) / 100;
         const date = c.created ? new Date(c.created * 1000).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
@@ -356,6 +379,20 @@ export function createApiApp(): Express {
         chargesCount++;
       }
 
+      // Limpa charges reembolsados que já estavam no DB
+      let refundedCleaned = 0;
+      if (refundedIds.length > 0) {
+        for (const rid of refundedIds) {
+          const { data: deleted } = await supabase
+            .from('financial_transactions')
+            .delete()
+            .eq('user_id', userId)
+            .like('description', `%(ID: ${rid})%`)
+            .select('id');
+          refundedCleaned += deleted?.length || 0;
+        }
+      }
+
       if (newTxs.length === 0) {
         return res.json({ success: true, count: 0, message: 'Nenhuma transação nova.' });
       }
@@ -366,7 +403,7 @@ export function createApiApp(): Express {
         return res.status(500).json({ error: 'Falha ao inserir', details: error.message });
       }
 
-      res.json({ success: true, count: newTxs.length, saques: saquesCount, charges: chargesCount });
+      res.json({ success: true, count: newTxs.length, saques: saquesCount, charges: chargesCount, refundedCleaned });
     } catch (error: any) {
       console.error('Stripe sync exception:', error);
       res.status(500).json({ error: error?.message || 'Erro interno' });
