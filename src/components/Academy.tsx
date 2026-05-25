@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Plus, MoreHorizontal, Link as LinkIcon, ChevronRight, ChevronDown, Folder, LayoutGrid, Settings, Trash2, Edit2, X, Check, BookOpen, Cloud, AlignLeft, GripVertical, PlayCircle, CheckSquare, ImagePlus, Copy, Calendar, User, Type, ChevronDownCircle, Hash, List, Loader2, Paperclip, PanelLeft } from 'lucide-react';
+import { Plus, MoreHorizontal, Link as LinkIcon, ChevronRight, ChevronDown, Folder, LayoutGrid, Settings, Trash2, Edit2, X, Check, BookOpen, Cloud, AlignLeft, GripVertical, PlayCircle, CheckSquare, ImagePlus, Copy, Calendar, User, Type, ChevronDownCircle, Hash, List, Loader2, Paperclip, PanelLeft, Download } from 'lucide-react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { supabase } from '../lib/supabase';
 import { MindMapEditor } from './MindMapEditor';
@@ -729,56 +729,52 @@ export default function Academy() {
     }));
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>, nodeId: string, colId: string, cardId: string) => {
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, nodeId: string, colId: string, cardId: string) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.type.startsWith('video/')) {
-      if (file.size > 10 * 1024 * 1024) {
-        alert('O vídeo deve ter no máximo 10MB.');
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        handleUpdateCard(nodeId, colId, cardId, { coverVideo: event.target?.result as string, coverImage: undefined });
-      };
-      reader.readAsDataURL(file);
+    const isVideo = file.type.startsWith('video/');
+    const maxSize = 25 * 1024 * 1024;
+    if (file.size > maxSize) {
+      alert(`O arquivo deve ter no máximo 25MB.`);
       return;
     }
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const MAX_WIDTH = 600;
-        const MAX_HEIGHT = 400;
-        let width = img.width;
-        let height = img.height;
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        alert('Usuário não autenticado.');
+        return;
+      }
 
-        if (width > height) {
-          if (width > MAX_WIDTH) {
-            height *= MAX_WIDTH / width;
-            width = MAX_WIDTH;
-          }
-        } else {
-          if (height > MAX_HEIGHT) {
-            width *= MAX_HEIGHT / height;
-            height = MAX_HEIGHT;
-          }
-        }
+      const ext = (file.name.split('.').pop() || (isVideo ? 'mp4' : 'jpg')).toLowerCase();
+      const path = `${user.id}/${cardId}-${Date.now()}.${ext}`;
 
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        ctx?.drawImage(img, 0, 0, width, height);
+      const { error: upErr } = await supabase.storage
+        .from('academy-covers')
+        .upload(path, file, { cacheControl: '3600', upsert: false, contentType: file.type });
 
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-        handleUpdateCard(nodeId, colId, cardId, { coverImage: dataUrl, coverVideo: undefined });
-      };
-      img.src = event.target?.result as string;
-    };
-    reader.readAsDataURL(file);
+      if (upErr) {
+        console.error('Upload error:', upErr);
+        alert(`Erro ao enviar arquivo: ${upErr.message}`);
+        return;
+      }
+
+      const { data: pub } = supabase.storage.from('academy-covers').getPublicUrl(path);
+      const publicUrl = pub.publicUrl;
+
+      if (isVideo) {
+        handleUpdateCard(nodeId, colId, cardId, { coverVideo: publicUrl, coverImage: undefined });
+      } else {
+        handleUpdateCard(nodeId, colId, cardId, { coverImage: publicUrl, coverVideo: undefined });
+      }
+    } catch (err: any) {
+      console.error('Image upload failed:', err);
+      alert(`Erro ao enviar: ${err.message || err}`);
+    } finally {
+      // permite re-selecionar o mesmo arquivo
+      if (e.target) e.target.value = '';
+    }
   };
 
   const handleUpdateCheck = (nodeId: string, colId: string, cardId: string, checkId: string, value: any) => {
@@ -1747,14 +1743,46 @@ export default function Academy() {
                       <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-2">
                         <label className="cursor-pointer px-4 py-2 bg-surface hover:bg-surface-2 text-text-main text-xs font-mono rounded transition-colors text-center w-24">
                           Trocar
-                          <input 
-                            type="file" 
-                            accept="image/*,video/*" 
-                            className="hidden" 
+                          <input
+                            type="file"
+                            accept="image/*,video/*"
+                            className="hidden"
                             onChange={(e) => handleImageUpload(e, editingCard.nodeId, editingCard.colId, editingCard.cardId)}
                           />
                         </label>
-                        <button 
+                        <button
+                          onClick={async () => {
+                            const url = (card.coverVideo || card.coverImage) as string;
+                            if (!url) return;
+                            const isVideo = !!card.coverVideo;
+                            const fallbackExt = isVideo ? 'mp4' : 'jpg';
+                            const safeTitle = (card.title || 'capa').replace(/[^a-z0-9-_]+/gi, '_').slice(0, 60) || 'capa';
+                            try {
+                              const res = await fetch(url);
+                              const blob = await res.blob();
+                              const mime = blob.type || '';
+                              const extFromMime = mime.split('/')[1]?.split(';')[0];
+                              const ext = extFromMime || (url.split('.').pop()?.split('?')[0]) || fallbackExt;
+                              const objUrl = URL.createObjectURL(blob);
+                              const a = document.createElement('a');
+                              a.href = objUrl;
+                              a.download = `${safeTitle}.${ext}`;
+                              document.body.appendChild(a);
+                              a.click();
+                              a.remove();
+                              setTimeout(() => URL.revokeObjectURL(objUrl), 1000);
+                            } catch (err) {
+                              console.error('Download failed:', err);
+                              window.open(url, '_blank');
+                            }
+                          }}
+                          className="px-4 py-2 bg-surface hover:bg-surface-2 text-text-main text-xs font-mono rounded transition-colors w-24 flex items-center justify-center gap-1"
+                          title="Baixar"
+                        >
+                          <Download className="w-3 h-3" />
+                          Baixar
+                        </button>
+                        <button
                           onClick={() => handleUpdateCard(editingCard.nodeId, editingCard.colId, editingCard.cardId, { coverImage: undefined, coverVideo: undefined })}
                           className="px-4 py-2 bg-error hover:bg-error/80 text-black text-xs font-mono rounded transition-colors w-24"
                         >

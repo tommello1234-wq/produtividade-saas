@@ -38,14 +38,44 @@ export function createApiApp(): Express {
       const { userId } = req.params;
       const event = req.body.event;
       const payment = req.body.payment;
+      const transfer = req.body.transfer;
+
+      // Validação de token (header asaas-access-token).
+      // Se ASAAS_WEBHOOK_TOKEN não estiver definido, aceita (legacy/dev).
+      // Se estiver, exige match — rejeita 401 se não bater.
+      const expectedToken = process.env.ASAAS_WEBHOOK_TOKEN;
+      if (expectedToken) {
+        const got = (req.headers['asaas-access-token'] as string) || '';
+        if (got !== expectedToken) {
+          console.warn(`Asaas webhook: token mismatch (got '${got.slice(0, 6)}...', expected '${expectedToken.slice(0, 6)}...')`);
+          return res.status(401).json({ error: 'Invalid token' });
+        }
+      }
 
       console.log(`Received Asaas webhook for user ${userId}:`, event);
 
-      // Only process confirmed/received payments
+      if (!supabase) {
+        console.error('Supabase is not configured. Cannot save webhook data.');
+        return res.status(500).json({ error: 'Database not configured' });
+      }
+
+      // Helper: dedup por ID já existente (cobre webhook + sync manual)
+      const alreadyExists = async (id: string) => {
+        const { data } = await supabase!
+          .from('financial_transactions')
+          .select('id')
+          .eq('user_id', userId)
+          .like('description', `%(ID: ${id})%`)
+          .limit(1);
+        return !!(data && data.length);
+      };
+
+      // ============= VENDAS (PAYMENT_*) =============
       if (event === 'PAYMENT_RECEIVED' || event === 'PAYMENT_CONFIRMED') {
-        if (!supabase) {
-          console.error('Supabase is not configured. Cannot save webhook data.');
-          return res.status(500).json({ error: 'Database not configured' });
+        if (!payment?.id) return res.json({ received: true, skipped: 'no payment data' });
+        if (await alreadyExists(payment.id)) {
+          console.log(`Asaas payment ${payment.id} já existe, skipping`);
+          return res.json({ received: true, deduped: true });
         }
 
         const amount = payment.value || payment.netValue || 0;
@@ -55,31 +85,71 @@ export function createApiApp(): Express {
         const newTx = {
           user_id: userId,
           description: `[Asaas] ${description} (ID: ${payment.id})`,
-          category: 'Vendas|#10B981', // Green color for sales
+          category: 'Vendas|#10B981',
           amount: Math.abs(amount),
           type: 'income',
-          date: date
+          date,
         };
 
-        const { error } = await supabase
-          .from('financial_transactions')
-          .insert([newTx]);
-
+        const { error } = await supabase.from('financial_transactions').insert([newTx]);
         if (error) {
-          console.error('Error inserting Asaas transaction:', error);
-          if (error.message && error.message.includes('row-level security')) {
-            console.error('RLS Error: The server needs SUPABASE_SERVICE_ROLE_KEY to insert data via webhook.');
+          console.error('Error inserting Asaas payment:', error);
+          if (error.message?.includes('row-level security')) {
+            console.error('RLS Error: server needs SUPABASE_SERVICE_ROLE_KEY.');
           }
-          return res.status(500).json({ error: 'Failed to insert transaction', details: error.message });
+          return res.status(500).json({ error: 'Failed to insert payment', details: error.message });
+        }
+        console.log(`Recorded Asaas sale ${payment.id} for user ${userId}`);
+      }
+
+      // ============= SAQUES (TRANSFER_*) =============
+      // TRANSFER_DONE/CONFIRMED = saque efetivado.
+      // Modelo do usuário: saque = ENTRADA (dinheiro chegando pra ele), por isso type='income'.
+      // Aparece no MANUAIS lado Entradas com badge ASAAS.
+      else if (event === 'TRANSFER_DONE' || event === 'TRANSFER_CONFIRMED') {
+        if (!transfer?.id) return res.json({ received: true, skipped: 'no transfer data' });
+        if (await alreadyExists(transfer.id)) {
+          console.log(`Asaas transfer ${transfer.id} já existe, skipping`);
+          return res.json({ received: true, deduped: true });
         }
 
-        console.log('Successfully recorded Asaas sale for user', userId);
+        const value = transfer.value || transfer.netValue || 0;
+        const tType = transfer.operationType || transfer.type || 'TRANSFER';
+        const bankName = transfer.bankAccount?.bank?.name || transfer.bankAccount?.ownerName || '';
+        const baseDesc = (transfer.description || `${tType}${bankName ? ' ' + bankName : ''}`).trim();
+        const date =
+          transfer.transferDate ||
+          transfer.effectiveDate ||
+          transfer.confirmedDate ||
+          transfer.dateCreated ||
+          new Date().toISOString().split('T')[0];
+
+        const newTx = {
+          user_id: userId,
+          description: `[Saque Asaas] ${baseDesc} (ID: ${transfer.id})`,
+          category: 'Saque Asaas|#10B981',
+          amount: Math.abs(value),
+          type: 'income',
+          date: String(date).split('T')[0],
+        };
+
+        const { error } = await supabase.from('financial_transactions').insert([newTx]);
+        if (error) {
+          console.error('Error inserting Asaas transfer:', error);
+          return res.status(500).json({ error: 'Failed to insert transfer', details: error.message });
+        }
+        console.log(`Recorded Asaas saque ${transfer.id} (R$ ${value}) for user ${userId}`);
+      }
+
+      // Outros eventos (PAYMENT_OVERDUE, TRANSFER_FAILED, etc.) — só logamos
+      else {
+        console.log(`Asaas event not handled: ${event}`);
       }
 
       res.json({ received: true });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Webhook error:', error);
-      res.status(500).json({ error: 'Internal server error' });
+      res.status(500).json({ error: 'Internal server error', details: error?.message });
     }
   });
 
@@ -209,172 +279,6 @@ export function createApiApp(): Express {
     } catch (error: any) {
       console.error('Ticto webhook error:', error);
       res.status(500).json({ error: 'Internal server error', details: error?.message });
-    }
-  });
-
-  // ----------------- TICTO CSV IMPORT -----------------
-  // Recebe um array de linhas do CSV exportado pelo painel da Ticto
-  // Body: { userId: string, rows: Array<{ data, status, produto, valor, hash, ... }> }
-  app.post("/api/ticto/import-csv", async (req, res) => {
-    try {
-      const { userId, rows } = req.body || {};
-      if (!userId) return res.status(400).json({ error: 'userId obrigatório' });
-      if (!Array.isArray(rows)) return res.status(400).json({ error: 'rows precisa ser um array' });
-      if (!supabase) return res.status(500).json({ error: 'Banco não configurado' });
-
-      // Buscar IDs já existentes pra evitar duplicação
-      const { data: existing } = await supabase
-        .from('financial_transactions')
-        .select('description')
-        .eq('user_id', userId)
-        .like('description', '%[Ticto]%');
-
-      const existingIds = new Set(
-        (existing || [])
-          .map((tx: any) => {
-            const m = tx.description.match(/\(ID: ([^)]+)\)/);
-            return m ? m[1] : null;
-          })
-          .filter(Boolean)
-      );
-
-      const incomeStatusKeys = ['aprovado', 'aprovada', 'approved', 'authorized', 'autorizado', 'autorizada', 'paid', 'pago', 'paga', 'concluido', 'concluida', 'close'];
-      const reverseStatusKeys = ['estornado', 'estornada', 'reembolsado', 'reembolsada', 'refunded', 'chargeback', 'cancelado', 'cancelada'];
-
-      // Helper: pega o primeiro valor não-vazio entre várias chaves possíveis (tolerante a acento/encoding)
-      const pick = (row: any, ...keys: string[]) => {
-        for (const k of keys) {
-          if (row[k] !== undefined && row[k] !== '') return row[k];
-        }
-        return '';
-      };
-
-      const newTxs: any[] = [];
-      let skipped = 0;
-
-      for (const row of rows) {
-        // Status — tolerante a acentos/encoding
-        const status = String(
-          pick(row, 'Status', 'status', 'Situação', 'Situacao', 'situacao')
-        ).toLowerCase().trim();
-
-        // Produto + Oferta combinados na descrição
-        const productName = pick(
-          row,
-          'Nome do Produto',
-          'product',
-          'produto',
-          'Produto',
-          'product_name'
-        ) || 'Venda Ticto';
-        const offerName = pick(row, 'Nome da Oferta', 'offer', 'Oferta');
-        const fullProductName = offerName ? `${productName} - ${offerName}` : productName;
-
-        // ID único pra dedup: Código da Transação + Código da Oferta (mesma transação pode ter várias linhas/itens)
-        const transactionCode = pick(
-          row,
-          'Código da Transação',
-          'Codigo da Transacao',
-          'transaction_code',
-          'transaction_hash'
-        );
-        const offerCode = pick(row, 'Código da Oferta', 'Codigo da Oferta', 'offer_code');
-        const orderCode = pick(row, 'Código do Pedido', 'Codigo do Pedido', 'order_code');
-        const hash = transactionCode
-          ? `${transactionCode}${offerCode ? '_' + offerCode : ''}`
-          : (orderCode || `${Date.now()}_${Math.random().toString(36).slice(2)}`);
-
-        // Valor — Ticto tem "Valor do Item" (item) e "Valor Pago" (cliente pagou, com taxa). Usa Valor do Item.
-        const valorRaw = pick(
-          row,
-          'Valor do Item',
-          'Valor Pago',
-          'Valor do Pedido',
-          'value',
-          'valor',
-          'Valor',
-          'amount'
-        );
-        const amount = typeof valorRaw === 'number'
-          ? valorRaw
-          : Number(String(valorRaw).replace(/[^\d,.-]/g, '').replace(/\.(?=\d{3})/g, '').replace(',', '.')) || 0;
-
-        // Data — prefere Data do Pedido (timestamp da venda)
-        const dateRaw = pick(
-          row,
-          'Data do Pedido',
-          'Data da Transação',
-          'Data da Transacao',
-          'Data da Venda',
-          'date',
-          'data',
-          'Data',
-          'created_at'
-        ) || new Date().toISOString();
-        let date = String(dateRaw);
-        if (date.includes('/')) {
-          // "DD/MM/YYYY HH:MM:SS" ou "DD/MM/YYYY"
-          const [d, m, y] = date.split(' ')[0].split('/');
-          if (d && m && y) date = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
-        } else {
-          date = date.split('T')[0];
-        }
-
-        if (existingIds.has(String(hash))) {
-          skipped++;
-          continue;
-        }
-
-        const isIncome = incomeStatusKeys.some((k) => status.includes(k));
-        const isReverse = reverseStatusKeys.some((k) => status.includes(k));
-
-        if (amount <= 0) {
-          skipped++;
-          continue;
-        }
-
-        if (isReverse) {
-          newTxs.push({
-            user_id: userId,
-            description: `[Ticto] ESTORNO: ${fullProductName} (ID: ${hash})`,
-            category: 'Estorno|#EF4444',
-            amount: Math.abs(amount),
-            type: 'expense',
-            date,
-          });
-        } else if (isIncome || (!status && amount > 0)) {
-          // Status vazio + valor > 0 = presume venda válida
-          newTxs.push({
-            user_id: userId,
-            description: `[Ticto] ${fullProductName} (ID: ${hash})`,
-            category: 'Vendas|#10B981',
-            amount: Math.abs(amount),
-            type: 'income',
-            date,
-          });
-        } else {
-          // Status pendente/recusado/outro — pula
-          skipped++;
-        }
-      }
-
-      if (newTxs.length === 0) {
-        return res.json({ success: true, count: 0, skipped, message: 'Nenhuma nova venda pra importar.' });
-      }
-
-      const { error } = await supabase.from('financial_transactions').insert(newTxs);
-      if (error) {
-        console.error('Ticto CSV import error:', error);
-        if (error.message?.includes('row-level security')) {
-          return res.status(500).json({ error: 'Erro de RLS: configure SUPABASE_SERVICE_ROLE_KEY no servidor.' });
-        }
-        return res.status(500).json({ error: 'Falha ao inserir', details: error.message });
-      }
-
-      res.json({ success: true, count: newTxs.length, skipped });
-    } catch (error: any) {
-      console.error('Ticto CSV import exception:', error);
-      res.status(500).json({ error: error?.message || 'Erro interno' });
     }
   });
 
@@ -661,36 +565,71 @@ export function createApiApp(): Express {
         return allData;
       };
 
-      const [received, confirmed, receivedInCash] = await Promise.all([
+      // Saques (transfers Asaas → conta pessoal/banco). Como o usuário usa pra "tirar
+      // dinheiro pra si", contam como SAÍDA da empresa (pró-labore / distribuição).
+      const fetchTransfers = async () => {
+        let allData: any[] = [];
+        let offset = 0;
+        const limit = 100;
+        let hasMore = true;
+
+        while (hasMore) {
+          const response = await fetch(`https://api.asaas.com/v3/transfers?limit=${limit}&offset=${offset}`, {
+            headers: { 'access_token': asaasKey, 'Content-Type': 'application/json' }
+          });
+          if (!response.ok) {
+            const errText = await response.text();
+            console.error('Asaas Transfers API Error:', response.status, errText);
+            // Não quebra o sync de payments se transfers falhar (pode ser permissão da chave)
+            break;
+          }
+          const data = await response.json();
+          if (data.data && data.data.length > 0) {
+            allData = [...allData, ...data.data];
+            offset += limit;
+            hasMore = !!data.hasMore;
+          } else {
+            hasMore = false;
+          }
+        }
+        return allData;
+      };
+
+      const [received, confirmed, receivedInCash, transfers] = await Promise.all([
         fetchPayments('RECEIVED'),
         fetchPayments('CONFIRMED'),
-        fetchPayments('RECEIVED_IN_CASH')
+        fetchPayments('RECEIVED_IN_CASH'),
+        fetchTransfers()
       ]);
       const payments = [...received, ...confirmed, ...receivedInCash];
 
-      if (payments.length === 0) {
-        return res.json({ success: true, count: 0, message: 'Nenhuma cobrança recebida ou confirmada foi encontrada no Asaas.' });
+      if (payments.length === 0 && transfers.length === 0) {
+        return res.json({ success: true, count: 0, payments: 0, transfers: 0, message: 'Nenhuma cobrança ou saque foi encontrado no Asaas.' });
       }
 
+      // Dedup: payments via [Asaas] (ID: pay_*), transfers via [Saque Asaas] (ID: tr_*/transfer_*)
       const { data: existingTxs } = await supabase
         .from('financial_transactions')
         .select('description')
         .eq('user_id', userId)
-        .like('description', '%[Asaas]%');
+        .or('description.ilike.%[Asaas]%,description.ilike.%[Saque Asaas]%');
 
-      const existingIds = new Set(existingTxs?.map(tx => {
-        const match = tx.description.match(/\(ID: (pay_[^)]+)\)/);
-        return match ? match[1] : null;
-      }).filter(Boolean));
+      const existingIds = new Set(
+        existingTxs?.map(tx => {
+          const match = tx.description.match(/\(ID: ([^)]+)\)/);
+          return match ? match[1] : null;
+        }).filter(Boolean)
+      );
 
-      const newTxs = [];
+      const newTxs: any[] = [];
+      let newPayments = 0;
+      let newTransfers = 0;
+
       for (const p of payments) {
         if (existingIds.has(p.id)) continue;
-
         const amount = p.value || p.netValue || 0;
         const description = p.description || 'Venda Asaas';
         const date = p.paymentDate || p.clientPaymentDate || p.dateCreated || new Date().toISOString().split('T')[0];
-
         newTxs.push({
           user_id: userId,
           description: `[Asaas] ${description} (ID: ${p.id})`,
@@ -699,6 +638,27 @@ export function createApiApp(): Express {
           type: 'income',
           date: date.split('T')[0]
         });
+        newPayments++;
+      }
+
+      for (const t of transfers) {
+        if (existingIds.has(t.id)) continue;
+        const value = t.value || t.netValue || 0;
+        // operationType = "PIX"/"TED"/"INTERNAL" (semanticamente útil).
+        // type = "BANK_ACCOUNT" (técnico, feio na UI). Prioriza operationType.
+        const tType = t.operationType || t.type || 'TRANSFER';
+        const bankName = t.bankAccount?.bank?.name || t.bankAccount?.ownerName || '';
+        const baseDesc = (t.description || `${tType}${bankName ? ' ' + bankName : ''}`).trim();
+        const date = t.transferDate || t.effectiveDate || t.scheduleDate || t.dateCreated || new Date().toISOString().split('T')[0];
+        newTxs.push({
+          user_id: userId,
+          description: `[Saque Asaas] ${baseDesc} (ID: ${t.id})`,
+          category: 'Saque Asaas|#10B981',
+          amount: Math.abs(value),
+          type: 'income',
+          date: String(date).split('T')[0]
+        });
+        newTransfers++;
       }
 
       if (newTxs.length > 0) {
@@ -711,10 +671,229 @@ export function createApiApp(): Express {
         }
       }
 
-      res.json({ success: true, count: newTxs.length });
+      res.json({ success: true, count: newTxs.length, payments: newPayments, transfers: newTransfers });
     } catch (error: any) {
       console.error('Sync error:', error);
       res.status(500).json({ error: error.message || 'Falha ao sincronizar. Verifique a chave de API.' });
+    }
+  });
+
+  // ----------------- TICTO SYNC (OAuth2) -----------------
+  // Puxa Orders History via OAuth2 client_credentials, filtra status=closed
+  // (vendas pagas), dedup por (ID: hash). Mesmo prefixo `[Ticto]` do CSV import,
+  // então API e CSV não duplicam.
+  // Body: { userId: string, days?: number (default 90) }
+  app.post("/api/ticto/sync", async (req, res) => {
+    try {
+      const { userId, days = 90 } = req.body || {};
+      if (!userId) return res.status(400).json({ error: 'userId obrigatório' });
+      if (!supabase) return res.status(500).json({ error: 'Banco não configurado' });
+
+      const clientId = process.env.TICTO_CLIENT_ID;
+      const clientSecret = process.env.TICTO_CLIENT_SECRET;
+      if (!clientId || !clientSecret) {
+        return res.status(400).json({ error: 'TICTO_CLIENT_ID ou TICTO_CLIENT_SECRET não configurados.' });
+      }
+
+      const TICTO = 'https://glados.ticto.cloud';
+
+      // 1. Get OAuth token (validade 1h, sem cache pra simplicidade)
+      const tokenRes = await fetch(`${TICTO}/api/security/oauth/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({
+          grant_type: 'client_credentials',
+          client_id: clientId,
+          client_secret: clientSecret,
+          scope: '*',
+        }),
+      });
+      if (!tokenRes.ok) {
+        const errText = await tokenRes.text();
+        console.error('[Ticto] token error:', tokenRes.status, errText);
+        return res.status(401).json({ error: `Falha na autenticação Ticto (HTTP ${tokenRes.status}). Verifique TICTO_CLIENT_ID/SECRET.` });
+      }
+      const tokenData = await tokenRes.json();
+      const accessToken = tokenData.access_token;
+      if (!accessToken) {
+        console.error('[Ticto] resposta sem access_token:', tokenData);
+        return res.status(500).json({ error: 'Resposta do Ticto sem access_token.' });
+      }
+
+      // 2. Date range em DD/MM/YYYY (formato esperado pelo filter)
+      const today = new Date();
+      const fromDate = new Date(today);
+      fromDate.setDate(today.getDate() - Number(days));
+      const fmt = (d: Date) =>
+        `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+      const dateRange = `${fmt(fromDate)},${fmt(today)}`;
+
+      console.log(`[Ticto] sync ${dateRange} userId=${userId}`);
+
+      // 3. Fetch orders paginado (Laravel-style: data + meta.last_page + meta.per_page).
+      // SEM filtro de status na URL — Ticto não usa "closed", usa "authorized" (e outros).
+      // Filtramos localmente.
+      const fetchOrders = async () => {
+        const all: any[] = [];
+        let page = 1;
+        const maxPages = 100;
+        while (page <= maxPages) {
+          const url =
+            `${TICTO}/api/v1/orders/history` +
+            `?page=${page}` +
+            `&filter[betweenDates]=${encodeURIComponent(dateRange)}`;
+          const r = await fetch(url, {
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Accept': 'application/json',
+            },
+          });
+          if (!r.ok) {
+            const errText = await r.text();
+            console.error('[Ticto] orders error:', r.status, errText);
+            throw new Error(`Erro ao buscar orders Ticto (HTTP ${r.status}): ${errText.slice(0, 200)}`);
+          }
+          const data = await r.json();
+          const items: any[] = data.data || (Array.isArray(data) ? data : []);
+          if (!items.length) break;
+          all.push(...items);
+          const lastPage = data.meta?.last_page || data.last_page;
+          if (lastPage && page >= lastPage) break;
+          page++;
+        }
+        return all;
+      };
+
+      const orders = await fetchOrders();
+      console.log(`[Ticto] ${orders.length} orders no período`);
+
+      if (orders.length === 0) {
+        return res.json({ success: true, count: 0, total: 0, message: 'Nenhuma venda Ticto no período.' });
+      }
+
+      // 4. Dedup contra IDs já em [Ticto] (cobre tanto CSV quanto API)
+      const { data: existing } = await supabase
+        .from('financial_transactions')
+        .select('description')
+        .eq('user_id', userId)
+        .like('description', '%[Ticto]%');
+
+      const existingIds = new Set(
+        (existing || [])
+          .map((tx: any) => {
+            const m = tx.description.match(/\(ID: ([^)]+)\)/);
+            return m ? m[1] : null;
+          })
+          .filter(Boolean)
+      );
+
+      // 5. Helper defensivo de campo (suporta nested via "obj.prop")
+      const pick = (obj: any, ...keys: string[]) => {
+        for (const k of keys) {
+          const parts = k.split('.');
+          let v: any = obj;
+          for (const p of parts) v = v?.[p];
+          if (v !== undefined && v !== null && v !== '') return v;
+        }
+        return null;
+      };
+
+      // 6. Map orders → transactions
+      // Ticto retorna valores em CENTAVOS. Status "authorized" = pagamento aprovado.
+      // Outros status comuns: processing, refused, refunded, chargeback.
+      const VALID_STATUSES = new Set(['authorized', 'paid', 'approved']);
+
+      const newTxs: any[] = [];
+      let skipped = 0;
+      let skippedByStatus = 0;
+
+      for (const o of orders) {
+        // Status: pular qualquer coisa que não seja venda válida
+        const status = String(pick(o, 'transaction.status', 'status') || '').toLowerCase();
+        if (!VALID_STATUSES.has(status)) { skippedByStatus++; continue; }
+
+        // ID dedup — transaction.hash é único por cobrança (mesmo padrão do CSV import)
+        const id = pick(
+          o,
+          'transaction.hash',
+          'transaction.id',
+          'order.hash',
+          'order.id',
+          'hash',
+          'id'
+        );
+        if (!id) { skipped++; continue; }
+        if (existingIds.has(String(id))) { skipped++; continue; }
+
+        // Valor — em CENTAVOS, dividir por 100
+        const amountCents = pick(
+          o,
+          'transaction.paid_amount',
+          'order_item.amount',
+          'offer.price',
+          'paid_amount',
+          'amount',
+          'value'
+        );
+        const amount = (typeof amountCents === 'number'
+          ? amountCents
+          : Number(String(amountCents || 0).replace(/[^\d.-]/g, '')) || 0) / 100;
+        if (amount <= 0) { skipped++; continue; }
+
+        // Nome do produto + oferta
+        const productName = pick(o, 'product.name', 'product_name') || 'Venda Ticto';
+        const offerName = pick(o, 'offer.name', 'offer_name');
+        const fullName = offerName ? `${productName} - ${offerName}` : productName;
+
+        // Data — Ticto usa "DD/MM/YYYY HH:MM:SS" em approved_date
+        const dateRaw = pick(o, 'approved_date', 'transaction.created_at', 'created_at');
+        let date: string;
+        if (!dateRaw) {
+          date = new Date().toISOString().split('T')[0];
+        } else {
+          const s = String(dateRaw);
+          if (s.includes('/')) {
+            const [d, m, y] = s.split(' ')[0].split('/');
+            date = d && m && y
+              ? `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`
+              : new Date().toISOString().split('T')[0];
+          } else {
+            date = s.split('T')[0];
+          }
+        }
+
+        newTxs.push({
+          user_id: userId,
+          description: `[Ticto] ${fullName} (ID: ${id})`,
+          category: 'Vendas|#10B981',
+          amount: Math.abs(amount),
+          type: 'income',
+          date,
+        });
+      }
+
+      console.log(`[Ticto] ${orders.length} orders, ${newTxs.length} novas, ${skipped} duplicadas/inválidas, ${skippedByStatus} status inválido`);
+
+      if (newTxs.length > 0) {
+        const { error } = await supabase.from('financial_transactions').insert(newTxs);
+        if (error) {
+          if (error.message.includes('row-level security')) {
+            throw new Error('Erro de permissão no banco (RLS). SUPABASE_SERVICE_ROLE_KEY pode estar faltando.');
+          }
+          throw error;
+        }
+      }
+
+      res.json({
+        success: true,
+        count: newTxs.length,
+        skipped,
+        skippedByStatus,
+        total: orders.length,
+      });
+    } catch (error: any) {
+      console.error('[Ticto] sync error:', error);
+      res.status(500).json({ error: error.message || 'Falha no sync Ticto.' });
     }
   });
 

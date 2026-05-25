@@ -44,9 +44,9 @@ export default function Vendas() {
   // Sync state
   const [isSyncingAsaas, setIsSyncingAsaas] = useState(false);
   const [isSyncingContaSimples, setIsSyncingContaSimples] = useState(false);
+  const [isSyncingTicto, setIsSyncingTicto] = useState(false);
   const [syncMessage, setSyncMessage] = useState<{type: 'success' | 'error' | 'info', text: string} | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
-  const [isImportingTicto, setIsImportingTicto] = useState(false);
   const [isImportingExpenses, setIsImportingExpenses] = useState(false);
   const [showSyncMenu, setShowSyncMenu] = useState(false);
   const syncMenuRef = useRef<HTMLDivElement>(null);
@@ -65,6 +65,16 @@ export default function Vendas() {
 
   const toggleProduct = (productName: string) => {
     setExpandedProducts(prev => ({ ...prev, [productName]: !prev[productName] }));
+  };
+
+  // Formata "YYYY-MM-DD" (ou "YYYY-MM-DD HH:MM:SS") como "DD/MM/YYYY" SEM
+  // criar Date object — evita o shift de timezone que faz '2026-04-01' virar
+  // '31/03/2026' no browser BR (parsing UTC vs local). Consistente com o
+  // bucketing (que também usa split('-')).
+  const formatDateBR = (s: string): string => {
+    if (!s) return '';
+    const [y, m, d] = String(s).split(/[T ]/)[0].split('-');
+    return d && m && y ? `${d}/${m}/${y}` : String(s);
   };
 
   useEffect(() => {
@@ -88,10 +98,14 @@ export default function Vendas() {
       if (data.error) {
         setSyncMessage({ type: 'error', text: data.error });
       } else if (data.count === 0) {
-        setSyncMessage({ type: 'info', text: data.message || 'Nenhuma nova venda importada.' });
+        setSyncMessage({ type: 'info', text: data.message || 'Nada novo no Asaas.' });
       } else {
-        setSyncMessage({ type: 'success', text: `Sincronização concluída! ${data.count} novas vendas importadas.` });
-        fetchData(); // refresh transactions
+        const parts: string[] = [];
+        if (data.payments) parts.push(`${data.payments} venda${data.payments === 1 ? '' : 's'}`);
+        if (data.transfers) parts.push(`${data.transfers} saque${data.transfers === 1 ? '' : 's'}`);
+        const summary = parts.length ? parts.join(' + ') : `${data.count} item(s)`;
+        setSyncMessage({ type: 'success', text: `Asaas sincronizado: ${summary}.` });
+        fetchData();
       }
     } catch (e) {
       setSyncMessage({ type: 'error', text: 'Erro ao sincronizar com o Asaas.' });
@@ -136,6 +150,41 @@ export default function Vendas() {
     }
   };
 
+  // Sincroniza vendas Ticto via API (OAuth2 client_credentials).
+  // Usa mesmo prefixo `[Ticto]` do CSV — dedup por (ID:) cobre os 2 caminhos.
+  const handleSyncTicto = async () => {
+    if (!userId) return;
+    setIsSyncingTicto(true);
+    setSyncMessage(null);
+    try {
+      const res = await fetch('/api/ticto/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, days: 90 }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setSyncMessage({ type: 'error', text: data.error });
+      } else if (data.count === 0) {
+        setSyncMessage({
+          type: 'info',
+          text: data.message || `Nada novo do Ticto (${data.total || 0} orders, ${data.skipped || 0} já existiam).`,
+        });
+      } else {
+        setSyncMessage({
+          type: 'success',
+          text: `Ticto: ${data.count} venda${data.count === 1 ? '' : 's'} importada${data.count === 1 ? '' : 's'}${data.skipped ? ` (${data.skipped} já existiam)` : ''}.`,
+        });
+        fetchData();
+      }
+    } catch (e) {
+      setSyncMessage({ type: 'error', text: 'Erro ao sincronizar com o Ticto.' });
+    } finally {
+      setIsSyncingTicto(false);
+      setTimeout(() => setSyncMessage(null), 6000);
+    }
+  };
+
   // -------- Importador de CSV da Ticto --------
   const parseCSV = (text: string): Array<Record<string, string>> => {
     // Remove BOM se houver
@@ -171,47 +220,6 @@ export default function Vendas() {
       headers.forEach((h, i) => { obj[h] = vals[i] || ''; });
       return obj;
     });
-  };
-
-  const handleTictoImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = ''; // permite re-importar o mesmo arquivo
-    if (!file || !userId) return;
-    setIsImportingTicto(true);
-    setSyncMessage(null);
-    try {
-      // Ticto exporta CSV em ISO-8859-1 (Latin-1). Tenta UTF-8 primeiro;
-      // se detectar caracteres de substituição, refaz como Latin-1.
-      const buffer = await file.arrayBuffer();
-      let text = new TextDecoder('utf-8').decode(buffer);
-      if (text.includes('\uFFFD')) {
-        text = new TextDecoder('iso-8859-1').decode(buffer);
-      }
-      const rows = parseCSV(text);
-      if (rows.length === 0) {
-        setSyncMessage({ type: 'error', text: 'CSV vazio ou inválido.' });
-        return;
-      }
-      const res = await fetch('/api/ticto/import-csv', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, rows }),
-      });
-      const data = await res.json();
-      if (data.error) {
-        setSyncMessage({ type: 'error', text: data.error });
-      } else if (data.count === 0) {
-        setSyncMessage({ type: 'info', text: data.message || `Nenhuma nova venda. ${data.skipped || 0} já existiam.` });
-      } else {
-        setSyncMessage({ type: 'success', text: `${data.count} vendas Ticto importadas! ${data.skipped || 0} já existiam.` });
-        fetchData();
-      }
-    } catch (err: any) {
-      setSyncMessage({ type: 'error', text: err?.message || 'Falha ao importar CSV.' });
-    } finally {
-      setIsImportingTicto(false);
-      setTimeout(() => setSyncMessage(null), 6000);
-    }
   };
 
   // -------- Importador de CSV de DESPESAS (CNPJ) --------
@@ -272,7 +280,9 @@ export default function Vendas() {
       
       const allTxs = (data || []).filter(tx =>
         tx.description.includes('[Asaas]') ||
+        tx.description.includes('[Saque Asaas]') ||
         tx.description.includes('[Ticto]') ||
+        tx.description.includes('[Saque Ticto]') ||
         tx.description.includes('[CNPJ]') ||
         tx.description.includes('[Receita]')
       );
@@ -518,6 +528,22 @@ export default function Vendas() {
     }
   };
 
+  // Helpers de toggle entre modais Receita/Despesa, transferindo dados digitados
+  const switchToExpense = () => {
+    setExpenseDesc(incomeDesc);
+    setExpenseAmount(incomeAmount);
+    setExpenseDate(incomeDate);
+    setIsIncomeModalOpen(false);
+    setIsExpenseModalOpen(true);
+  };
+  const switchToIncome = () => {
+    setIncomeDesc(expenseDesc);
+    setIncomeAmount(expenseAmount);
+    setIncomeDate(expenseDate);
+    setIsExpenseModalOpen(false);
+    setIsIncomeModalOpen(true);
+  };
+
   const handleEditIncome = (tx: { id: string, description: string, amount: number, date: string }) => {
     setEditingIncomeId(tx.id);
     setIncomeDesc(tx.description.replace('[Receita] ', ''));
@@ -556,40 +582,57 @@ export default function Vendas() {
     }
   };
 
-  // Separate transactions (Asaas + Ticto + manual receitas)
+  // Separa transações por origem:
+  // - asaasTxs: vendas automáticas (Asaas + Ticto) — exibidas na aba RECEITAS (ASAAS)
+  // - manualIncomes: receitas ([Receita] manuais + [Saque Asaas] automáticos) — aba MANUAIS lado entradas
+  //   Modelo do usuário: saque do Asaas = ENTRADA (dinheiro chegando pra ele), não saída.
+  // - cnpjExpenses: despesas manuais ([CNPJ]) — aba MANUAIS lado saídas
   const asaasTxs = transactions.filter(tx =>
-    tx.description.includes('[Asaas]') ||
-    tx.description.includes('[Ticto]') ||
-    tx.description.includes('[Receita]')
+    tx.description.includes('[Asaas]') ||   // não casa com [Saque Asaas] (bracket diferente)
+    tx.description.includes('[Ticto]')
+  );
+  const manualIncomes = transactions.filter(tx =>
+    tx.description.includes('[Receita]') ||
+    tx.description.includes('[Saque Asaas]') ||
+    tx.description.includes('[Saque Ticto]')
   );
   const cnpjExpenses = transactions.filter(tx => tx.description.includes('[CNPJ]'));
 
-  // Group CNPJ Expenses
-  const groupedExpensesMap = new Map<string, { total: number, count: number, category: string, date: string, items: Transaction[], hasSubItems: boolean }>();
-  
-  cnpjExpenses.forEach(tx => {
-    let cleanDesc = tx.description.replace('[CNPJ] ', '');
-    let mainDesc = cleanDesc;
-    let isSubItem = false;
-    
-    if (cleanDesc.includes(' - ')) {
-      mainDesc = cleanDesc.split(' - ')[0];
-      isSubItem = true;
-    }
+  // Group CNPJ Expenses POR MÊS + VENDOR (evita que um grupo cruze meses)
+  const cleanCnpjDesc = (raw: string) => {
+    let s = raw
+      .replace('[CNPJ] ', '')
+      .replace('[Saque Asaas] ', '')
+      .replace(/\(ID: [^)]+\)\s*$/, '')
+      .trim();
+    let main = s;
+    let isSub = false;
+    if (s.includes(' - ')) { main = s.split(' - ')[0]; isSub = true; }
+    return { mainDesc: main, isSubItem: isSub };
+  };
 
-    if (!groupedExpensesMap.has(mainDesc)) {
-      groupedExpensesMap.set(mainDesc, { total: 0, count: 0, category: tx.category, date: tx.date, items: [], hasSubItems: isSubItem });
+  // Mapa: "YYYY-MM::vendor" → group
+  const groupedExpensesMonthMap = new Map<string, { month: string, mainDesc: string, total: number, count: number, category: string, date: string, items: Transaction[], hasSubItems: boolean }>();
+
+  cnpjExpenses.forEach(tx => {
+    const { mainDesc, isSubItem } = cleanCnpjDesc(tx.description);
+    const month = (tx.date || '').slice(0, 7); // YYYY-MM
+    const key = `${month}::${mainDesc}`;
+
+    if (!groupedExpensesMonthMap.has(key)) {
+      groupedExpensesMonthMap.set(key, { month, mainDesc, total: 0, count: 0, category: tx.category, date: tx.date, items: [], hasSubItems: isSubItem });
     }
-    
-    const group = groupedExpensesMap.get(mainDesc)!;
+    const group = groupedExpensesMonthMap.get(key)!;
     group.total += Math.abs(tx.amount);
     group.count += 1;
     group.items.push(tx);
     if (isSubItem) group.hasSubItems = true;
+    // Mantém a data mais recente como representativa do grupo (afeta ordenação dentro do mês)
+    if (new Date(tx.date).getTime() > new Date(group.date).getTime()) group.date = tx.date;
   });
 
-  const groupedExpenses = Array.from(groupedExpensesMap.entries())
-    .map(([name, data]) => ({ name, ...data }))
+  const groupedExpenses = Array.from(groupedExpensesMonthMap.values())
+    .map(g => ({ name: g.mainDesc, total: g.total, count: g.count, category: g.category, date: g.date, items: g.items, hasSubItems: g.hasSubItems }))
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
   // Filtro genérico de data — usado para income E expenses
@@ -655,37 +698,90 @@ export default function Vendas() {
       .map(({ sortKey: _, ...rest }) => rest);
   })();
 
+  const totalManualIncomes = manualIncomes.reduce((acc, curr) => acc + Math.abs(curr.amount), 0);
+
+  // União mês-a-mês: cada bucket combina entradas (manualIncomes) + saídas (groupedExpenses)
+  // do mesmo mês. Usado pelo layout estilo PESSOAL — header full-width, expansão revela
+  // tabela de entradas | tabela de saídas dentro daquele mês.
+  type MonthUnion = {
+    key: string;
+    label: string;
+    incomes: Transaction[];
+    expenseGroups: ExpenseGroup[];
+    totalIncome: number;
+    totalExpense: number;
+  };
+  const allMonthBuckets: MonthUnion[] = (() => {
+    const buckets = new Map<string, MonthUnion & { sortKey: number }>();
+    const ensure = (date: Date) => {
+      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      if (!buckets.has(key)) {
+        let label = date.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+        label = label.charAt(0).toUpperCase() + label.slice(1).replace(' de ', ' De ');
+        buckets.set(key, {
+          key,
+          label,
+          incomes: [],
+          expenseGroups: [],
+          totalIncome: 0,
+          totalExpense: 0,
+          sortKey: date.getFullYear() * 100 + date.getMonth(),
+        });
+      }
+      return buckets.get(key)!;
+    };
+    manualIncomes.forEach((tx) => {
+      const [y, m, d] = tx.date.split('-');
+      const date = new Date(parseInt(y), parseInt(m) - 1, parseInt(d || '1'));
+      const b = ensure(date);
+      b.incomes.push(tx);
+      b.totalIncome += Math.abs(tx.amount);
+    });
+    groupedExpenses.forEach((g) => {
+      const [y, m, d] = g.date.split('-');
+      const date = new Date(parseInt(y), parseInt(m) - 1, parseInt(d || '1'));
+      const b = ensure(date);
+      b.expenseGroups.push(g);
+      b.totalExpense += g.total;
+    });
+    return Array.from(buckets.values())
+      .sort((a, b) => b.sortKey - a.sortKey)
+      .map(({ sortKey: _, ...rest }) => rest);
+  })();
+
   // Default: mês mais recente expandido se nada foi tocado ainda
   const isMonthExpanded = (key: string) => {
     if (key in expandedExpenseMonths) return expandedExpenseMonths[key];
-    return key === expensesByMonth[0]?.key; // primeiro = mais recente
+    return key === allMonthBuckets[0]?.key;
   };
   const toggleMonth = (key: string) => {
     setExpandedExpenseMonths((prev) => ({ ...prev, [key]: !isMonthExpanded(key) }));
   };
 
   // Group transactions by product and date to merge installments into single sales
+  // Estornos (type='expense') subtraem do total; vendas (type='income') somam.
   const groupedSalesMap = new Map<string, { id: string, description: string, amount: number, date: string, count: number, isManual: boolean, originalTxId: string }>();
-  
+
   filteredTxs.forEach(tx => {
     let cleanDesc = tx.description.replace('[Asaas] ', '').replace('[Receita] ', '').replace(/\(ID: .*\)/, '').trim();
     cleanDesc = cleanDesc.replace(/^Parcela \d+ de \d+\.\s*/i, '');
-    
+
     const isManual = tx.description.includes('[Receita]');
-    
-    // Key based on product name and date (or unique ID for manual)
+    const sign = tx.type === 'expense' ? -1 : 1;     // estorno = negativo
+    const signedAmount = sign * Math.abs(tx.amount);
+
     const dateStr = tx.date.split('T')[0];
     const key = isManual ? `manual-${tx.id}` : `${cleanDesc}-${dateStr}`;
-    
+
     if (groupedSalesMap.has(key)) {
       const existing = groupedSalesMap.get(key)!;
-      existing.amount += Math.abs(tx.amount);
+      existing.amount += signedAmount;
       existing.count += 1;
     } else {
       groupedSalesMap.set(key, {
         id: tx.id,
         description: cleanDesc,
-        amount: Math.abs(tx.amount),
+        amount: signedAmount,
         date: tx.date,
         count: 1,
         isManual: isManual,
@@ -696,8 +792,9 @@ export default function Vendas() {
 
   const groupedSales = Array.from(groupedSalesMap.values()).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-  const totalSales = groupedSales.reduce((acc, curr) => acc + curr.amount, 0);
-  const salesCount = groupedSales.length;
+  const totalSales = groupedSales.reduce((acc, curr) => acc + curr.amount, 0);    // já líquido (vendas - estornos)
+  // Conta SÓ vendas reais (income), excluindo estornos da contagem
+  const salesCount = filteredTxs.filter(tx => tx.type !== 'expense').length;
   const averageTicket = salesCount > 0 ? totalSales / salesCount : 0;
 
   // Group by Product Family
@@ -769,9 +866,11 @@ export default function Vendas() {
     }))
     .sort((a, b) => b.total - a.total);
 
-  // Group by Day for the chart
-  const dailyDataMap = new Map<string, number>();
-  
+  // Group by Day for the chart — agora mantém breakdown por origem (Asaas vs Ticto)
+  // pra tooltip mostrar a divisão. `amount` total continua sendo o valor da barra.
+  type DailyBucket = { asaas: number; ticto: number; manual: number; amount: number };
+  const dailyDataMap = new Map<string, DailyBucket>();
+
   // Initialize dates based on filter to show empty days too
   if (dateFilter !== 'all') {
     const days = dateFilter === '7d' ? 7 : dateFilter === '30d' ? 30 : dateFilter === '90d' ? 90 : 30; // approx for months
@@ -780,17 +879,25 @@ export default function Vendas() {
       const d = new Date(today);
       d.setDate(today.getDate() - i);
       const dateStr = d.toISOString().split('T')[0];
-      dailyDataMap.set(dateStr, 0);
+      dailyDataMap.set(dateStr, { asaas: 0, ticto: 0, manual: 0, amount: 0 });
     }
   }
 
   filteredTxs.forEach(tx => {
     const dateStr = tx.date.split('T')[0];
-    dailyDataMap.set(dateStr, (dailyDataMap.get(dateStr) || 0) + Math.abs(tx.amount));
+    const bucket = dailyDataMap.get(dateStr) || { asaas: 0, ticto: 0, manual: 0, amount: 0 };
+    // Vendas somam, estornos subtraem (mostra receita líquida real)
+    const sign = tx.type === 'expense' ? -1 : 1;
+    const v = sign * Math.abs(tx.amount);
+    if (tx.description.includes('[Asaas]')) bucket.asaas += v;
+    else if (tx.description.includes('[Ticto]')) bucket.ticto += v;
+    else if (tx.description.includes('[Receita]')) bucket.manual += v;
+    bucket.amount += v;
+    dailyDataMap.set(dateStr, bucket);
   });
 
   const dailyData = Array.from(dailyDataMap.entries())
-    .map(([date, amount]) => ({ date, amount }))
+    .map(([date, b]) => ({ date, ...b }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
   const COLORS = ['#10B981', '#3B82F6', '#8B5CF6', '#F59E0B', '#EF4444', '#EC4899', '#14B8A6'];
@@ -846,11 +953,11 @@ export default function Vendas() {
             <div className="relative" ref={syncMenuRef}>
               <button
                 onClick={() => setShowSyncMenu((v) => !v)}
-                disabled={isSyncingAsaas || isSyncingContaSimples || isImportingTicto}
+                disabled={isSyncingAsaas || isSyncingContaSimples || isSyncingTicto}
                 className="bg-surface border border-border-subtle text-text-muted hover:text-text-main hover:bg-surface-2 px-3 py-2 text-xs font-mono tracking-[0.1em] uppercase transition-colors flex items-center gap-2 disabled:opacity-50"
                 title="Sincronizar manualmente (normalmente é automático)"
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${(isSyncingAsaas || isSyncingContaSimples || isImportingTicto) ? 'animate-spin' : ''}`} />
+                <RefreshCw className={`w-3.5 h-3.5 ${(isSyncingAsaas || isSyncingContaSimples || isSyncingTicto) ? 'animate-spin' : ''}`} />
                 Sincronizar
                 <ChevronDown className="w-3 h-3" />
               </button>
@@ -881,23 +988,17 @@ export default function Vendas() {
                     </div>
                     <div className="text-[10px] text-text-muted mt-0.5">Forçar sync agora (últimos 90 dias)</div>
                   </button>
-                  <label
-                    className={`block px-3 py-2.5 hover:bg-surface-2 transition-colors cursor-pointer ${isImportingTicto ? 'opacity-50 cursor-not-allowed' : ''}`}
-                    onClick={() => setShowSyncMenu(false)}
+                  <button
+                    onClick={() => { setShowSyncMenu(false); handleSyncTicto(); }}
+                    disabled={isSyncingTicto}
+                    className="w-full text-left px-3 py-2.5 hover:bg-surface-2 transition-colors disabled:opacity-50"
                   >
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-text-main">Ticto (CSV)</span>
+                      <span className="text-xs font-bold text-text-main">Ticto (API)</span>
                       <span className="text-[9px] font-mono text-success">AUTO via webhook</span>
                     </div>
-                    <div className="text-[10px] text-text-muted mt-0.5">Importar planilha (backfill histórico)</div>
-                    <input
-                      type="file"
-                      accept=".csv,text/csv"
-                      onChange={handleTictoImport}
-                      disabled={isImportingTicto}
-                      className="hidden"
-                    />
-                  </label>
+                    <div className="text-[10px] text-text-muted mt-0.5">Forçar sync via OAuth (últimos 90 dias)</div>
+                  </button>
                 </div>
               )}
             </div>
@@ -932,7 +1033,7 @@ export default function Vendas() {
               : 'text-text-muted border-transparent hover:text-text-main hover:bg-surface'
           }`}
         >
-          DESPESAS MANUAIS
+          MANUAIS
         </button>
       </div>
 
@@ -1008,16 +1109,35 @@ export default function Vendas() {
                   axisLine={false}
                   tickFormatter={(value) => `R$${value}`}
                 />
-                <Tooltip 
-                  formatter={(value: number) => [`R$ ${value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, 'Faturamento']}
-                  labelFormatter={(label) => {
-                    const [year, month, day] = label.split('-');
-                    return `${day}/${month}/${year}`;
-                  }}
-                  contentStyle={{ backgroundColor: '#0A0A0A', borderColor: '#333', borderRadius: '0px' }}
-                  itemStyle={{ color: '#10B981', fontSize: '12px', fontFamily: 'monospace' }}
-                  labelStyle={{ color: '#666', fontSize: '10px', fontFamily: 'monospace', marginBottom: '4px' }}
+                <Tooltip
                   cursor={{ fill: '#ffffff0a' }}
+                  content={({ active, payload, label }) => {
+                    if (!active || !payload || !payload.length) return null;
+                    const d: any = payload[0].payload;
+                    const [year, month, day] = String(label).split('-');
+                    const fmt = (n: number) => `R$ ${n.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
+                    return (
+                      <div className="bg-bg border border-border-subtle px-3 py-2 font-mono">
+                        <div className="text-[10px] text-text-muted mb-1.5">{day}/{month}/{year}</div>
+                        <div className="text-xs font-bold text-success mb-1">Total: {fmt(d.amount || 0)}</div>
+                        {d.asaas > 0 && (
+                          <div className="text-[10px] text-success/80 flex justify-between gap-3">
+                            <span>● Asaas</span><span>{fmt(d.asaas)}</span>
+                          </div>
+                        )}
+                        {d.ticto > 0 && (
+                          <div className="text-[10px] text-info flex justify-between gap-3">
+                            <span>● Ticto</span><span>{fmt(d.ticto)}</span>
+                          </div>
+                        )}
+                        {d.manual > 0 && (
+                          <div className="text-[10px] text-text-muted flex justify-between gap-3">
+                            <span>● Manual</span><span>{fmt(d.manual)}</span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }}
                 />
                 <Bar dataKey="amount" fill="#10B981" radius={[2, 2, 0, 0]} />
               </BarChart>
@@ -1156,216 +1276,351 @@ export default function Vendas() {
 
       {activeTab === 'despesas' && (
         <div className="space-y-6 animate-in fade-in duration-300">
-          <div className="flex justify-between items-center">
-            <div className="bg-surface border border-border-subtle p-6 relative overflow-hidden group flex-1 max-w-sm">
-              <div className="absolute inset-0 bg-danger/5 translate-y-[100%] group-hover:translate-y-0 transition-transform duration-500"></div>
-              <div className="relative z-10">
-                <div className="text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] mb-2 flex items-center gap-2">
-                  <Activity className="w-3 h-3 text-danger" />
-                  Total de Despesas (CNPJ)
+          {/* Header: 2 metric cards (Entradas + Saídas) + 3 botões de ação */}
+          <div className="flex flex-col xl:flex-row justify-between items-stretch xl:items-center gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 flex-1 max-w-2xl">
+              {/* Card: Total Entradas Manuais */}
+              <div className="bg-surface border border-border-subtle p-6 relative overflow-hidden group">
+                <div className="absolute inset-0 bg-success/5 translate-y-[100%] group-hover:translate-y-0 transition-transform duration-500"></div>
+                <div className="relative z-10">
+                  <div className="text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] mb-2 flex items-center gap-2">
+                    <DollarSign className="w-3 h-3 text-success" />
+                    Total Entradas Manuais
+                  </div>
+                  <div className="text-3xl font-black tracking-[-1px] text-success">
+                    R$ {totalManualIncomes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                  </div>
                 </div>
-                <div className="text-3xl font-black tracking-[-1px] text-danger">
-                  R$ {totalExpenses.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+              </div>
+
+              {/* Card: Total Despesas (CNPJ) */}
+              <div className="bg-surface border border-border-subtle p-6 relative overflow-hidden group">
+                <div className="absolute inset-0 bg-danger/5 translate-y-[100%] group-hover:translate-y-0 transition-transform duration-500"></div>
+                <div className="relative z-10">
+                  <div className="text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] mb-2 flex items-center gap-2">
+                    <Activity className="w-3 h-3 text-danger" />
+                    Total de Despesas (CNPJ)
+                  </div>
+                  <div className="text-3xl font-black tracking-[-1px] text-danger">
+                    R$ {totalExpenses.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                  </div>
                 </div>
               </div>
             </div>
 
-            <div className="flex items-center gap-3">
-              <label
-                className={`bg-info text-bg px-4 py-2 text-xs font-bold uppercase tracking-[0.1em] hover:bg-info/90 transition-colors flex items-center gap-2 cursor-pointer ${
-                  isImportingExpenses ? 'opacity-50 cursor-not-allowed' : ''
-                }`}
-                title="Importar CSV de fatura ou extrato bancário"
-              >
-                <Activity className={`w-4 h-4 ${isImportingExpenses ? 'animate-spin' : ''}`} />
-                {isImportingExpenses ? 'Importando...' : 'Importar CSV'}
-                <input
-                  type="file"
-                  accept=".csv,text/csv"
-                  onChange={handleExpenseImport}
-                  disabled={isImportingExpenses}
-                  className="hidden"
-                />
-              </label>
+            <div className="flex flex-wrap items-center gap-3">
               <button
-                onClick={() => setIsExpenseModalOpen(true)}
+                onClick={() => setIsIncomeModalOpen(true)}
                 className="bg-accent text-bg px-4 py-2 text-xs font-bold uppercase tracking-[0.1em] hover:bg-accent/90 transition-colors flex items-center gap-2"
+                title="Adicionar receita ou despesa (toggle dentro do modal)"
               >
                 <Plus className="w-4 h-4" />
-                Nova Despesa
+                Nova Transação
               </button>
             </div>
           </div>
 
-          <div className="bg-surface border border-border-subtle overflow-hidden">
-            <div className="p-4 border-b border-border-subtle bg-surface-2/50 flex justify-between items-center">
-              <h3 className="text-xs font-bold uppercase tracking-[0.1em] text-text-muted">Histórico de Despesas</h3>
-              <div className="text-[10px] font-mono text-text-muted">{filteredCnpjExpenses.length} registros</div>
+          {/* Acordeão por mês — estilo PESSOAL: header full-width, expansão revela Entradas|Saídas dentro */}
+          {allMonthBuckets.length === 0 ? (
+            <div className="p-12 text-center text-sm font-mono text-text-muted uppercase border border-border-subtle bg-surface">
+              Nenhuma movimentação registrada ainda. Use os botões acima pra adicionar.
             </div>
-            {expensesByMonth.length === 0 ? (
-              <div className="p-8 text-center text-sm font-mono text-text-muted">
-                Nenhuma despesa registrada no período selecionado.
-              </div>
-            ) : (
-              <div className="divide-y divide-border-subtle">
-                {expensesByMonth.map((monthBucket) => {
-                  const isOpen = isMonthExpanded(monthBucket.key);
-                  return (
-                    <div key={monthBucket.key} className="flex flex-col">
-                      {/* Cabeçalho do mês */}
-                      <button
-                        onClick={() => toggleMonth(monthBucket.key)}
-                        className="flex items-center justify-between p-4 bg-surface-2/40 hover:bg-surface-2/60 transition-colors w-full"
-                      >
-                        <div className="flex items-center gap-3">
-                          <span className="text-text-muted">{isOpen ? '▼' : '▶'}</span>
-                          <h4 className="text-lg font-black tracking-tight text-white">{monthBucket.label}</h4>
-                          <span className="text-[10px] font-mono text-text-muted">
-                            {monthBucket.groups.length} grupo{monthBucket.groups.length !== 1 ? 's' : ''}
+          ) : (
+            <div className="space-y-8">
+              {allMonthBuckets.map((m) => {
+                const isOpen = isMonthExpanded(m.key);
+                const saldo = m.totalIncome - m.totalExpense;
+                return (
+                  <div key={m.key} className="space-y-4">
+                    {/* Header do mês — card destacado com resumo inline (entradas/saídas/saldo) */}
+                    <button
+                      onClick={() => toggleMonth(m.key)}
+                      className={`w-full bg-surface border ${isOpen ? 'border-accent/40' : 'border-border-subtle'} p-5 hover:bg-surface-2/40 transition-all flex flex-col lg:flex-row lg:items-center gap-4 group`}
+                    >
+                      {/* Título do mês */}
+                      <div className="flex items-center gap-3 lg:flex-1">
+                        <ChevronDown className={`w-5 h-5 text-text-muted transition-transform duration-300 shrink-0 ${isOpen ? 'rotate-180 text-accent' : ''}`} />
+                        <h3 className="text-2xl font-black tracking-tight text-white capitalize">{m.label}</h3>
+                      </div>
+
+                      {/* Resumo inline */}
+                      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs font-mono">
+                        <div className="flex items-center gap-2">
+                          <span className="text-success text-sm">▲</span>
+                          <span className="text-text-muted uppercase tracking-[0.05em] text-[10px]">Entradas</span>
+                          <span className="font-bold text-success">
+                            +R$ {m.totalIncome.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                           </span>
                         </div>
-                        <div className="text-sm font-mono font-bold text-danger">
-                          - R$ {monthBucket.total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+
+                        <div className="flex items-center gap-2">
+                          <span className="text-danger text-sm">▼</span>
+                          <span className="text-text-muted uppercase tracking-[0.05em] text-[10px]">Saídas</span>
+                          <span className="font-bold text-danger">
+                            -R$ {m.totalExpense.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          </span>
                         </div>
-                      </button>
-                      {/* Lista do mês */}
-                      {isOpen && (
-                        <div className="divide-y divide-border-subtle">
-                          {monthBucket.groups.map(group => {
-                  const [catName, catColor] = group.category.split('|');
-                  
-                  return (
-                    <div key={group.name} className="flex flex-col">
-                      <div
-                        className={`p-4 flex items-center justify-between hover:bg-surface-2/30 transition-colors group ${
-                          group.hasSubItems
-                            ? 'cursor-pointer bg-surface-2/20 border-l-2 border-l-accent/40 hover:border-l-accent'
-                            : 'border-l-2 border-l-transparent'
-                        }`}
-                        onClick={() => { if (group.hasSubItems) toggleProduct(`exp_${group.name}`); }}
-                      >
-                        <div className="flex items-center gap-4 min-w-0">
-                          <div className="w-10 h-10 rounded-full bg-danger/10 flex items-center justify-center border border-danger/20 shrink-0">
-                            <DollarSign className="w-4 h-4 text-danger" />
-                          </div>
-                          <div className="min-w-0">
-                            <div className="text-sm font-bold text-white truncate flex items-center gap-2" title={group.name}>
-                              {group.name}
-                              {group.category.endsWith('|recurring') && (
-                                <span className="text-[9px] bg-accent/20 text-accent px-1 rounded-sm font-bold" title="Recorrente">R</span>
-                              )}
-                            </div>
-                            <div className="text-[10px] font-mono text-text-muted flex items-center gap-2">
-                              <span>{new Date(group.date).toLocaleDateString('pt-BR')}</span>
-                              <span className="flex items-center gap-1">
-                                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: catColor || '#9CA3AF' }}></span>
-                                {catName || 'Outros'}
-                              </span>
-                              {group.hasSubItems && (
-                                <span className="bg-surface-3 px-1.5 py-0.5 rounded-sm text-[9px] text-white">
-                                  {group.count} {group.count === 1 ? 'item' : 'itens'}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                        <div className="text-right shrink-0 ml-4 flex items-center gap-3">
-                          <div className="text-sm font-mono font-bold text-danger w-32 text-right">
-                            - R$ {group.total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                          </div>
-                          {!group.hasSubItems ? (
-                            <div className="flex items-center justify-end gap-1 w-[120px]">
-                              <button
-                                onClick={(e) => { e.stopPropagation(); handleAddSubItem(group); }}
-                                className="p-2 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm transition-colors opacity-0 group-hover:opacity-100"
-                                title="Adicionar Subitem"
-                              >
-                                <Plus className="w-4 h-4" />
-                              </button>
-                              <button
-                                onClick={(e) => { e.stopPropagation(); handleEditExpense(group.items[0]); }}
-                                className="p-2 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm transition-colors opacity-0 group-hover:opacity-100"
-                                title="Editar"
-                              >
-                                <Edit2 className="w-4 h-4" />
-                              </button>
-                              <button
-                                onClick={(e) => { e.stopPropagation(); handleDeleteExpense(group.items[0].id); }}
-                                className="p-2 text-text-muted hover:text-danger hover:bg-danger/10 rounded-sm transition-colors opacity-0 group-hover:opacity-100"
-                                title="Excluir"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
-                          ) : (
-                            <div className="flex items-center justify-end gap-1 w-[120px]">
-                              <button
-                                onClick={(e) => { e.stopPropagation(); handleAddSubItem(group); }}
-                                className="p-2 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm transition-colors opacity-0 group-hover:opacity-100"
-                                title="Adicionar Subitem"
-                              >
-                                <Plus className="w-4 h-4" />
-                              </button>
-                              <div className="text-text-muted w-8 text-center">
-                                {expandedProducts[`exp_${group.name}`] ? '▼' : '▶'}
-                              </div>
-                            </div>
-                          )}
+
+                        <div className="flex items-center gap-2 lg:pl-4 lg:border-l lg:border-border-subtle">
+                          <span className="text-text-muted uppercase tracking-[0.05em] text-[10px]">Saldo</span>
+                          <span className={`text-lg font-black tracking-tight ${saldo >= 0 ? 'text-success' : 'text-danger'}`}>
+                            {saldo >= 0 ? '+' : ''}R$ {saldo.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          </span>
                         </div>
                       </div>
-                      
-                      {/* Sub-items Breakdown */}
-                      {group.hasSubItems && expandedProducts[`exp_${group.name}`] && (
-                        <div className="bg-surface-2/30 border-t border-border-subtle p-4 pl-16 space-y-3">
-                          {group.items.map(tx => {
-                            const subName = tx.description.replace('[CNPJ] ', '').replace(`${group.name} - `, '');
-                            return (
-                              <div key={tx.id} className="flex items-center justify-between group/sub">
-                                <div className="min-w-0">
-                                  <div className="text-xs font-medium text-white/80 truncate" title={subName}>
-                                    {subName}
-                                  </div>
-                                  <div className="text-[10px] font-mono text-text-muted">
-                                    {new Date(tx.date).toLocaleDateString('pt-BR')}
-                                  </div>
-                                </div>
-                                <div className="flex items-center gap-4">
-                                  <div className="text-xs font-mono font-bold text-danger/80">
-                                    - R$ {Math.abs(tx.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                                  </div>
-                                  <div className="flex items-center gap-1">
-                                    <button
-                                      onClick={() => handleEditExpense(tx)}
-                                      className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm transition-colors opacity-0 group-hover/sub:opacity-100"
-                                      title="Editar"
-                                    >
-                                      <Edit2 className="w-3 h-3" />
-                                    </button>
-                                    <button
-                                      onClick={() => handleDeleteExpense(tx.id)}
-                                      className="p-1.5 text-text-muted hover:text-danger hover:bg-danger/10 rounded-sm transition-colors opacity-0 group-hover/sub:opacity-100"
-                                      title="Excluir"
-                                    >
-                                      <Trash2 className="w-3 h-3" />
-                                    </button>
-                                  </div>
-                                </div>
+                    </button>
+
+                    {isOpen && (
+                      <div className="space-y-4 animate-in fade-in slide-in-from-top-4 duration-300">
+                        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+
+                          {/* ENTRADAS deste mês */}
+                          <div className="bg-surface border border-border-subtle overflow-hidden">
+                            <div className="p-4 border-b border-border-subtle bg-surface-2/50 flex justify-between items-center">
+                              <h4 className="text-xs font-bold uppercase tracking-[0.1em] text-success flex items-center gap-2">
+                                <span>▲</span> Entradas
+                              </h4>
+                              <span className="text-[10px] font-mono text-text-muted">
+                                {m.incomes.length} {m.incomes.length === 1 ? 'item' : 'itens'}
+                              </span>
+                            </div>
+                            {m.incomes.length === 0 ? (
+                              <div className="p-6 text-center text-xs font-mono text-text-muted">
+                                Sem entradas neste mês.
                               </div>
-                            );
-                          })}
+                            ) : (
+                              <div className="divide-y divide-border-subtle">
+                                {m.incomes.map((tx) => {
+                                  const isSaqueAsaas = tx.description.includes('[Saque Asaas]');
+                                  const isSaqueTicto = tx.description.includes('[Saque Ticto]');
+                                  const cleanDesc = tx.description
+                                    .replace('[Receita] ', '')
+                                    .replace('[Saque Asaas] ', '')
+                                    .replace('[Saque Ticto] ', '')
+                                    .replace(/\(ID: [^)]+\)\s*$/, '')
+                                    .trim();
+                                  return (
+                                    <div
+                                      key={tx.id}
+                                      className="p-4 flex items-center justify-between hover:bg-surface-2/30 transition-colors group border-l-2 border-l-transparent hover:border-l-success/40"
+                                    >
+                                      <div className="flex items-center gap-3 min-w-0">
+                                        <div className="w-9 h-9 rounded-full bg-success/10 flex items-center justify-center border border-success/20 shrink-0">
+                                          <DollarSign className="w-4 h-4 text-success" />
+                                        </div>
+                                        <div className="min-w-0">
+                                          <div className="text-sm font-bold text-white truncate flex items-center gap-2" title={cleanDesc}>
+                                            {cleanDesc}
+                                            {isSaqueAsaas && (
+                                              <span className="text-[9px] bg-success/20 text-success px-1 rounded-sm font-bold" title="Saque do Asaas — sincronizado automaticamente">ASAAS</span>
+                                            )}
+                                            {isSaqueTicto && (
+                                              <span className="text-[9px] bg-info/20 text-info px-1 rounded-sm font-bold" title="Saque do Ticto — registrado manualmente">TICTO</span>
+                                            )}
+                                          </div>
+                                          <div className="text-[10px] font-mono text-text-muted">{formatDateBR(tx.date)}</div>
+                                        </div>
+                                      </div>
+                                      <div className="text-right shrink-0 ml-3 flex items-center gap-2">
+                                        <div className="text-sm font-mono font-bold text-success">+ R$ {Math.abs(tx.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                          <button
+                                            onClick={(e) => { e.stopPropagation(); handleEditIncome(tx); }}
+                                            className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm"
+                                            title="Editar"
+                                          >
+                                            <Edit2 className="w-3.5 h-3.5" />
+                                          </button>
+                                          <button
+                                            onClick={(e) => { e.stopPropagation(); handleDeleteIncome(tx.id); }}
+                                            className="p-1.5 text-text-muted hover:text-danger hover:bg-danger/10 rounded-sm"
+                                            title="Excluir"
+                                          >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                            {m.incomes.length > 0 && (
+                              <div className="p-3 border-t border-border-subtle bg-surface-2/30 flex justify-between items-center">
+                                <span className="text-[10px] font-mono uppercase text-text-muted tracking-[0.1em]">Total Entradas</span>
+                                <span className="text-sm font-mono font-bold text-success">+ R$ {m.totalIncome.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* SAÍDAS deste mês — preserva grouping + sub-items + recurring + edit/delete */}
+                          <div className="bg-surface border border-border-subtle overflow-hidden">
+                            <div className="p-4 border-b border-border-subtle bg-surface-2/50 flex justify-between items-center gap-3">
+                              <h4 className="text-xs font-bold uppercase tracking-[0.1em] text-danger flex items-center gap-2 shrink-0">
+                                <span>▼</span> Saídas
+                              </h4>
+                              <div className="flex items-center gap-3 shrink-0">
+                                <span className="text-[10px] font-mono text-text-muted">
+                                  {m.expenseGroups.length} {m.expenseGroups.length === 1 ? 'grupo' : 'grupos'}
+                                </span>
+                                <label
+                                  className={`bg-info text-bg px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-[0.05em] hover:bg-info/90 transition-colors flex items-center gap-1.5 cursor-pointer ${
+                                    isImportingExpenses ? 'opacity-50 cursor-not-allowed' : ''
+                                  }`}
+                                  title="Importar CSV de fatura ou extrato bancário (datas vêm do CSV)"
+                                >
+                                  <Activity className={`w-3 h-3 ${isImportingExpenses ? 'animate-spin' : ''}`} />
+                                  {isImportingExpenses ? 'Importando...' : 'Importar CSV'}
+                                  <input
+                                    type="file"
+                                    accept=".csv,text/csv"
+                                    onChange={handleExpenseImport}
+                                    disabled={isImportingExpenses}
+                                    className="hidden"
+                                  />
+                                </label>
+                              </div>
+                            </div>
+                            {m.expenseGroups.length === 0 ? (
+                              <div className="p-6 text-center text-xs font-mono text-text-muted">
+                                Sem saídas neste mês.
+                              </div>
+                            ) : (
+                              <div className="divide-y divide-border-subtle">
+                                {m.expenseGroups.map((group) => {
+                                  const [catName, catColor] = group.category.split('|');
+                                  return (
+                                    <div key={group.name} className="flex flex-col">
+                                      <div
+                                        className={`p-4 flex items-center justify-between hover:bg-surface-2/30 transition-colors group ${
+                                          group.hasSubItems
+                                            ? 'cursor-pointer bg-surface-2/20 border-l-2 border-l-accent/40 hover:border-l-accent'
+                                            : 'border-l-2 border-l-transparent'
+                                        }`}
+                                        onClick={() => { if (group.hasSubItems) toggleProduct(`exp_${group.name}`); }}
+                                      >
+                                        <div className="flex items-center gap-3 min-w-0">
+                                          <div className="w-9 h-9 rounded-full bg-danger/10 flex items-center justify-center border border-danger/20 shrink-0">
+                                            <DollarSign className="w-4 h-4 text-danger" />
+                                          </div>
+                                          <div className="min-w-0">
+                                            <div className="text-sm font-bold text-white truncate flex items-center gap-2" title={group.name}>
+                                              {group.name}
+                                              {group.category.endsWith('|recurring') && (
+                                                <span className="text-[9px] bg-accent/20 text-accent px-1 rounded-sm font-bold" title="Recorrente">R</span>
+                                              )}
+                                            </div>
+                                            <div className="text-[10px] font-mono text-text-muted flex items-center gap-2">
+                                              <span>{formatDateBR(group.date)}</span>
+                                              <span className="flex items-center gap-1">
+                                                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: catColor || '#9CA3AF' }}></span>
+                                                {catName || 'Outros'}
+                                              </span>
+                                              {group.hasSubItems && (
+                                                <span className="bg-surface-3 px-1.5 py-0.5 rounded-sm text-[9px] text-white">
+                                                  {group.count} {group.count === 1 ? 'item' : 'itens'}
+                                                </span>
+                                              )}
+                                            </div>
+                                          </div>
+                                        </div>
+                                        <div className="text-right shrink-0 ml-3 flex items-center gap-2">
+                                          <div className="text-sm font-mono font-bold text-danger">- R$ {group.total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                                          {!group.hasSubItems ? (
+                                            <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                              <button
+                                                onClick={(e) => { e.stopPropagation(); handleAddSubItem(group); }}
+                                                className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm"
+                                                title="Adicionar Subitem"
+                                              >
+                                                <Plus className="w-3.5 h-3.5" />
+                                              </button>
+                                              <button
+                                                onClick={(e) => { e.stopPropagation(); handleEditExpense(group.items[0]); }}
+                                                className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm"
+                                                title="Editar"
+                                              >
+                                                <Edit2 className="w-3.5 h-3.5" />
+                                              </button>
+                                              <button
+                                                onClick={(e) => { e.stopPropagation(); handleDeleteExpense(group.items[0].id); }}
+                                                className="p-1.5 text-text-muted hover:text-danger hover:bg-danger/10 rounded-sm"
+                                                title="Excluir"
+                                              >
+                                                <Trash2 className="w-3.5 h-3.5" />
+                                              </button>
+                                            </div>
+                                          ) : (
+                                            <div className="flex items-center justify-end gap-1">
+                                              <button
+                                                onClick={(e) => { e.stopPropagation(); handleAddSubItem(group); }}
+                                                className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm opacity-0 group-hover:opacity-100"
+                                                title="Adicionar Subitem"
+                                              >
+                                                <Plus className="w-3.5 h-3.5" />
+                                              </button>
+                                              <div className="text-text-muted text-xs ml-1">
+                                                {expandedProducts[`exp_${group.name}`] ? '▼' : '▶'}
+                                              </div>
+                                            </div>
+                                          )}
+                                        </div>
+                                      </div>
+
+                                      {group.hasSubItems && expandedProducts[`exp_${group.name}`] && (
+                                        <div className="bg-surface-2/30 border-t border-border-subtle p-4 pl-12 space-y-3">
+                                          {group.items.map((tx) => {
+                                            const subName = tx.description.replace('[CNPJ] ', '').replace(`${group.name} - `, '');
+                                            return (
+                                              <div key={tx.id} className="flex items-center justify-between group/sub">
+                                                <div className="min-w-0">
+                                                  <div className="text-xs font-medium text-white/80 truncate" title={subName}>{subName}</div>
+                                                  <div className="text-[10px] font-mono text-text-muted">{formatDateBR(tx.date)}</div>
+                                                </div>
+                                                <div className="flex items-center gap-3">
+                                                  <div className="text-xs font-mono font-bold text-danger/80">- R$ {Math.abs(tx.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                                                  <div className="flex items-center gap-1">
+                                                    <button
+                                                      onClick={() => handleEditExpense(tx)}
+                                                      className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm opacity-0 group-hover/sub:opacity-100"
+                                                      title="Editar"
+                                                    >
+                                                      <Edit2 className="w-3 h-3" />
+                                                    </button>
+                                                    <button
+                                                      onClick={() => handleDeleteExpense(tx.id)}
+                                                      className="p-1.5 text-text-muted hover:text-danger hover:bg-danger/10 rounded-sm opacity-0 group-hover/sub:opacity-100"
+                                                      title="Excluir"
+                                                    >
+                                                      <Trash2 className="w-3 h-3" />
+                                                    </button>
+                                                  </div>
+                                                </div>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                            {m.expenseGroups.length > 0 && (
+                              <div className="p-3 border-t border-border-subtle bg-surface-2/30 flex justify-between items-center">
+                                <span className="text-[10px] font-mono uppercase text-text-muted tracking-[0.1em]">Total Saídas</span>
+                                <span className="text-sm font-mono font-bold text-danger">- R$ {m.totalExpense.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -1423,9 +1678,9 @@ export default function Vendas() {
           <div className="bg-surface w-full max-w-md border border-border-subtle shadow-2xl animate-in zoom-in-95 duration-200">
             <div className="flex items-center justify-between p-4 border-b border-border-subtle">
               <h2 className="text-sm font-bold uppercase tracking-[0.1em] text-white">
-                {editingIncomeId ? 'Editar Receita Manual' : 'Nova Receita Manual'}
+                {editingIncomeId ? 'Editar Transação' : 'Nova Transação'}
               </h2>
-              <button 
+              <button
                 onClick={() => {
                   setIsIncomeModalOpen(false);
                   setEditingIncomeId(null);
@@ -1437,7 +1692,28 @@ export default function Vendas() {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            
+
+            {/* Toggle Receita/Despesa — só pra novas transações (em edit fica fixo no tipo original) */}
+            {!editingIncomeId && (
+              <div className="px-4 pt-4">
+                <div className="flex bg-surface-2 border border-border-subtle p-1 gap-1">
+                  <button
+                    type="button"
+                    className="flex-1 py-2 text-[10px] font-mono uppercase tracking-[0.1em] bg-success/20 text-success font-bold"
+                  >
+                    ▲ Receita
+                  </button>
+                  <button
+                    type="button"
+                    onClick={switchToExpense}
+                    className="flex-1 py-2 text-[10px] font-mono uppercase tracking-[0.1em] text-text-muted hover:text-white hover:bg-surface-3 transition-colors"
+                  >
+                    ▼ Despesa
+                  </button>
+                </div>
+              </div>
+            )}
+
             <form onSubmit={handleAddIncome} className="p-4 space-y-4">
               <div>
                 <label className="block text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] mb-2">Descrição da Receita</label>
@@ -1493,9 +1769,9 @@ export default function Vendas() {
           <div className="bg-surface w-full max-w-md border border-border-subtle shadow-2xl animate-in zoom-in-95 duration-200">
             <div className="flex items-center justify-between p-4 border-b border-border-subtle">
               <h2 className="text-sm font-bold uppercase tracking-[0.1em] text-white">
-                {editingExpenseId ? 'Editar Despesa (CNPJ)' : 'Nova Despesa (CNPJ)'}
+                {editingExpenseId ? 'Editar Transação' : 'Nova Transação'}
               </h2>
-              <button 
+              <button
                 onClick={() => {
                   setIsExpenseModalOpen(false);
                   setEditingExpenseId(null);
@@ -1509,7 +1785,28 @@ export default function Vendas() {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            
+
+            {/* Toggle Receita/Despesa — só pra novas transações */}
+            {!editingExpenseId && (
+              <div className="px-6 pt-4">
+                <div className="flex bg-surface-2 border border-border-subtle p-1 gap-1">
+                  <button
+                    type="button"
+                    onClick={switchToIncome}
+                    className="flex-1 py-2 text-[10px] font-mono uppercase tracking-[0.1em] text-text-muted hover:text-white hover:bg-surface-3 transition-colors"
+                  >
+                    ▲ Receita
+                  </button>
+                  <button
+                    type="button"
+                    className="flex-1 py-2 text-[10px] font-mono uppercase tracking-[0.1em] bg-danger/20 text-danger font-bold"
+                  >
+                    ▼ Despesa
+                  </button>
+                </div>
+              </div>
+            )}
+
             <form onSubmit={handleAddExpense} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto hide-scrollbar">
               <div>
                 <label className="block text-[10px] font-mono text-text-muted uppercase tracking-[0.1em] mb-2">Descrição Principal</label>

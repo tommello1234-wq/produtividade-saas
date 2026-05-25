@@ -321,8 +321,10 @@ export default function Finances() {
         const realTransactions = txRes.data.filter(t =>
           t.description !== '__FINANCIAL_TAGS__' &&
           !t.description.includes('[Asaas]') &&
+          !t.description.includes('[Saque Asaas]') &&
           !t.description.includes('[CNPJ]') &&
           !t.description.includes('[Ticto]') &&
+          !t.description.includes('[Saque Ticto]') &&
           !t.description.includes('[Receita]')
         );
         setTransactions(realTransactions);
@@ -841,7 +843,7 @@ export default function Finances() {
   // Filtra apenas transações do TESOURO (sem prefixos de Vendas/CNPJ)
   const tesouroOnly = transactions.filter((t) => {
     const d = t.description || '';
-    return !d.includes('[Asaas]') && !d.includes('[Ticto]') && !d.includes('[Receita]') && !d.includes('[CNPJ]');
+    return !d.includes('[Asaas]') && !d.includes('[Saque Asaas]') && !d.includes('[Ticto]') && !d.includes('[Saque Ticto]') && !d.includes('[Receita]') && !d.includes('[CNPJ]');
   });
 
   const currentMonthTxs = tesouroOnly.filter(t => {
@@ -1343,7 +1345,9 @@ export default function Finances() {
       const desc = tx.description || '';
       return (
         !desc.includes('[Asaas]') &&
+        !desc.includes('[Saque Asaas]') &&
         !desc.includes('[Ticto]') &&
+        !desc.includes('[Saque Ticto]') &&
         !desc.includes('[Receita]') &&
         !desc.includes('[CNPJ]')
       );

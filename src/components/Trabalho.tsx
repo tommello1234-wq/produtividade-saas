@@ -1,10 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { Clock, AlertCircle, CheckCircle2, Plus, GripVertical, Trash2, X, Save, User, Share2 } from 'lucide-react';
+import { Clock, AlertCircle, CheckCircle2, Plus, GripVertical, Trash2, X, Save, User, Share2, ListChecks } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 
 type Priority = 'low' | 'medium' | 'high';
 type Status = 'backlog' | 'doing' | 'done';
+
+interface SubItem {
+  id: string;
+  text: string;
+  completed: boolean;
+}
 
 interface Task {
   id: string;
@@ -16,12 +22,15 @@ interface Task {
   xp_reward: number;
   tags?: string[];
   responsible?: string;
+  sub_items?: SubItem[];
+  position?: number;
 }
 
 export default function Trabalho() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
+  const [dragOverTaskId, setDragOverTaskId] = useState<string | null>(null);
 
   // Form state
   const [title, setTitle] = useState('');
@@ -30,6 +39,8 @@ export default function Trabalho() {
   const [deadline, setDeadline] = useState('');
   const [tagsInput, setTagsInput] = useState('');
   const [responsible, setResponsible] = useState('');
+  const [subItems, setSubItems] = useState<SubItem[]>([]);
+  const [newSubItemText, setNewSubItemText] = useState('');
 
   // Edit Modal state
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
@@ -41,6 +52,8 @@ export default function Trabalho() {
   const [editXpReward, setEditXpReward] = useState(0);
   const [editTagsInput, setEditTagsInput] = useState('');
   const [editResponsible, setEditResponsible] = useState('');
+  const [editSubItems, setEditSubItems] = useState<SubItem[]>([]);
+  const [editNewSubItemText, setEditNewSubItemText] = useState('');
 
   // Create & Share Modals state
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -68,6 +81,8 @@ export default function Trabalho() {
     setEditXpReward(task.xp_reward);
     setEditTagsInput(task.tags ? task.tags.join(', ') : '');
     setEditResponsible(task.responsible || '');
+    setEditSubItems(task.sub_items ? [...task.sub_items] : []);
+    setEditNewSubItemText('');
     setIsEditModalOpen(true);
   };
 
@@ -83,7 +98,8 @@ export default function Trabalho() {
       deadline: editDeadline || null,
       xp_reward: editXpReward,
       tags: tagsArray.length > 0 ? tagsArray : null,
-      responsible: editResponsible || null
+      responsible: editResponsible || null,
+      sub_items: editSubItems
     };
 
     try {
@@ -125,22 +141,79 @@ export default function Trabalho() {
     e.dataTransfer.dropEffect = 'move';
   };
 
+  const persistReorder = async (status: Status, orderedIds: string[]) => {
+    setTasks(prev => prev.map(t => {
+      const idx = orderedIds.indexOf(t.id);
+      if (idx === -1) return t;
+      return { ...t, status, position: idx };
+    }));
+    await Promise.all(orderedIds.map((id, idx) =>
+      supabase.from('work_tasks').update({ status, position: idx }).eq('id', id)
+    ));
+  };
+
+  const reorderTasks = async (draggedId: string, targetStatus: Status, targetTaskId: string | null) => {
+    const dragged = tasks.find(t => t.id === draggedId);
+    if (!dragged) return;
+
+    const columnTasks = tasks
+      .filter(t => t.status === targetStatus && t.id !== draggedId)
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+
+    let insertAt = columnTasks.length;
+    if (targetTaskId) {
+      const idx = columnTasks.findIndex(t => t.id === targetTaskId);
+      if (idx !== -1) insertAt = idx;
+    }
+    const newOrder = [...columnTasks];
+    newOrder.splice(insertAt, 0, dragged);
+    const orderedIds = newOrder.map(t => t.id);
+
+    const statusChanged = dragged.status !== targetStatus;
+    await persistReorder(targetStatus, orderedIds);
+
+    if (statusChanged && targetStatus === 'done') {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data: profile } = await supabase
+          .from('profiles').select('total_xp').eq('id', user.id).single();
+        if (profile) {
+          await supabase.from('profiles')
+            .update({ total_xp: profile.total_xp + dragged.xp_reward })
+            .eq('id', user.id);
+        }
+      }
+    }
+  };
+
   const handleDrop = async (e: React.DragEvent, newStatus: Status) => {
     e.preventDefault();
     if (!draggedTaskId) return;
-
-    const taskToUpdate = tasks.find(t => t.id === draggedTaskId);
-    if (!taskToUpdate || taskToUpdate.status === newStatus) {
-      setDraggedTaskId(null);
-      return;
-    }
-
     try {
-      await updateTask(draggedTaskId, { status: newStatus });
+      await reorderTasks(draggedTaskId, newStatus, null);
     } catch (error) {
-      console.error('Error updating task status:', error);
+      console.error('Error reordering task:', error);
     } finally {
       setDraggedTaskId(null);
+      setDragOverTaskId(null);
+    }
+  };
+
+  const handleCardDrop = async (e: React.DragEvent, targetTask: Task) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!draggedTaskId || draggedTaskId === targetTask.id) {
+      setDraggedTaskId(null);
+      setDragOverTaskId(null);
+      return;
+    }
+    try {
+      await reorderTasks(draggedTaskId, targetTask.status, targetTask.id);
+    } catch (error) {
+      console.error('Error reordering task:', error);
+    } finally {
+      setDraggedTaskId(null);
+      setDragOverTaskId(null);
     }
   };
 
@@ -148,9 +221,13 @@ export default function Trabalho() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error('User not authenticated');
 
+    const sameStatus = tasks.filter(t => t.status === taskData.status);
+    const maxPos = sameStatus.reduce((m, t) => Math.max(m, t.position ?? 0), -1);
+
     const newTask = {
       user_id: user.id,
-      ...taskData
+      ...taskData,
+      position: maxPos + 1
     };
 
     const { data, error } = await supabase
@@ -223,7 +300,8 @@ export default function Trabalho() {
         status: 'backlog',
         xp_reward,
         tags: tagsArray.length > 0 ? tagsArray : null,
-        responsible: responsible || null
+        responsible: responsible || null,
+        sub_items: subItems
       });
 
       setTitle('');
@@ -232,6 +310,8 @@ export default function Trabalho() {
       setDeadline('');
       setTagsInput('');
       setResponsible('');
+      setSubItems([]);
+      setNewSubItemText('');
       setIsCreateModalOpen(false);
     } catch (error: any) {
       console.error('Error adding task:', error);
@@ -300,8 +380,53 @@ export default function Trabalho() {
     return 'BAIXA';
   };
 
+  const toggleSubItem = async (taskId: string, subItemId: string) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task || !task.sub_items) return;
+    const updated = task.sub_items.map(si =>
+      si.id === subItemId ? { ...si, completed: !si.completed } : si
+    );
+    try {
+      await updateTask(taskId, { sub_items: updated });
+    } catch (error) {
+      console.error('Error toggling sub-item:', error);
+    }
+  };
+
+  const addEditSubItem = () => {
+    const text = editNewSubItemText.trim();
+    if (!text) return;
+    setEditSubItems(prev => [...prev, { id: crypto.randomUUID(), text, completed: false }]);
+    setEditNewSubItemText('');
+  };
+
+  const removeEditSubItem = (id: string) => {
+    setEditSubItems(prev => prev.filter(si => si.id !== id));
+  };
+
+  const toggleEditSubItem = (id: string) => {
+    setEditSubItems(prev => prev.map(si => si.id === id ? { ...si, completed: !si.completed } : si));
+  };
+
+  const updateEditSubItemText = (id: string, text: string) => {
+    setEditSubItems(prev => prev.map(si => si.id === id ? { ...si, text } : si));
+  };
+
+  const addCreateSubItem = () => {
+    const text = newSubItemText.trim();
+    if (!text) return;
+    setSubItems(prev => [...prev, { id: crypto.randomUUID(), text, completed: false }]);
+    setNewSubItemText('');
+  };
+
+  const removeCreateSubItem = (id: string) => {
+    setSubItems(prev => prev.filter(si => si.id !== id));
+  };
+
   const renderColumn = (status: Status, columnTitle: string, colorClass: string) => {
-    const columnTasks = filteredTasks.filter(t => t.status === status);
+    const columnTasks = filteredTasks
+      .filter(t => t.status === status)
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
 
     return (
       <div 
@@ -320,12 +445,17 @@ export default function Trabalho() {
         
         <div className="p-4 flex-1 space-y-3 overflow-y-auto">
           {columnTasks.map(task => (
-            <div 
+            <div
               key={task.id}
               draggable
               onDragStart={(e) => handleDragStart(e, task.id)}
+              onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); if (draggedTaskId && draggedTaskId !== task.id) setDragOverTaskId(task.id); }}
+              onDragLeave={() => { if (dragOverTaskId === task.id) setDragOverTaskId(null); }}
+              onDrop={(e) => handleCardDrop(e, task)}
               onClick={() => openEditModal(task)}
-              className="bg-surface border border-border-subtle p-4 cursor-grab active:cursor-grabbing hover:border-accent/50 transition-colors group relative"
+              className={`bg-surface border p-4 cursor-grab active:cursor-grabbing hover:border-accent/50 transition-colors group relative ${
+                dragOverTaskId === task.id ? 'border-error border-t-2' : 'border-border-subtle'
+              } ${draggedTaskId === task.id ? 'opacity-40' : ''}`}
             >
               <div className="absolute left-0 top-0 bottom-0 w-1 bg-border-subtle group-hover:bg-accent/50 transition-colors"></div>
               
@@ -359,6 +489,32 @@ export default function Trabalho() {
                       #{tag}
                     </span>
                   ))}
+                </div>
+              )}
+
+              {task.sub_items && task.sub_items.length > 0 && (
+                <div className="mb-3 pl-2 space-y-1">
+                  {task.sub_items.map(si => (
+                    <label
+                      key={si.id}
+                      onClick={(e) => e.stopPropagation()}
+                      className="flex items-center gap-2 text-[11px] font-mono cursor-pointer group/sub"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={si.completed}
+                        onChange={() => toggleSubItem(task.id, si.id)}
+                        onClick={(e) => e.stopPropagation()}
+                        className="w-3 h-3 accent-success cursor-pointer"
+                      />
+                      <span className={si.completed ? 'line-through text-text-muted/60' : 'text-text-main'}>
+                        {si.text}
+                      </span>
+                    </label>
+                  ))}
+                  <div className="text-[9px] font-mono text-text-muted/70 mt-1">
+                    {task.sub_items.filter(si => si.completed).length}/{task.sub_items.length} concluídos
+                  </div>
                 </div>
               )}
 
@@ -619,12 +775,61 @@ export default function Trabalho() {
 
               <div>
                 <label className="block text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2">Recompensa (XP)</label>
-                <input 
-                  type="number" 
-                  value={editXpReward} 
-                  onChange={(e) => setEditXpReward(Number(e.target.value))} 
-                  className="w-32 bg-surface border border-border-subtle px-4 py-2 text-sm font-mono text-text-main focus:outline-none focus:border-error transition-colors" 
+                <input
+                  type="number"
+                  value={editXpReward}
+                  onChange={(e) => setEditXpReward(Number(e.target.value))}
+                  className="w-32 bg-surface border border-border-subtle px-4 py-2 text-sm font-mono text-text-main focus:outline-none focus:border-error transition-colors"
                 />
+              </div>
+
+              <div>
+                <label className="flex items-center gap-2 text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2">
+                  <ListChecks className="w-3 h-3" />
+                  Subtarefas
+                </label>
+                <div className="space-y-2">
+                  {editSubItems.map(si => (
+                    <div key={si.id} className="flex items-center gap-2 bg-surface border border-border-subtle px-3 py-2">
+                      <input
+                        type="checkbox"
+                        checked={si.completed}
+                        onChange={() => toggleEditSubItem(si.id)}
+                        className="w-4 h-4 accent-success cursor-pointer"
+                      />
+                      <input
+                        type="text"
+                        value={si.text}
+                        onChange={(e) => updateEditSubItemText(si.id, e.target.value)}
+                        className={`flex-1 bg-transparent text-sm font-mono focus:outline-none ${si.completed ? 'line-through text-text-muted/60' : 'text-text-main'}`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeEditSubItem(si.id)}
+                        className="text-text-muted hover:text-error transition-colors"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ))}
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={editNewSubItemText}
+                      onChange={(e) => setEditNewSubItemText(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addEditSubItem(); } }}
+                      placeholder="ADICIONAR SUBTAREFA..."
+                      className="flex-1 bg-surface border border-border-subtle px-3 py-2 text-sm font-mono text-text-main focus:outline-none focus:border-error transition-colors placeholder:text-text-muted/50 uppercase"
+                    />
+                    <button
+                      type="button"
+                      onClick={addEditSubItem}
+                      className="bg-surface border border-border-subtle px-3 py-2 text-text-muted hover:text-error hover:border-error transition-colors"
+                    >
+                      <Plus className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -747,6 +952,52 @@ export default function Trabalho() {
                       onChange={(e) => setDeadline(e.target.value)}
                       className="w-full bg-surface border border-border-subtle px-4 py-3 text-sm font-mono text-text-main focus:outline-none focus:border-error transition-colors uppercase" 
                     />
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="flex items-center gap-2 text-[10px] font-mono text-text-dark uppercase tracking-[0.1em] mb-2">
+                  <ListChecks className="w-3 h-3" />
+                  Subtarefas (Opcional)
+                </label>
+                <div className="space-y-2">
+                  {subItems.map(si => (
+                    <div key={si.id} className="flex items-center gap-2 bg-surface border border-border-subtle px-3 py-2">
+                      <input
+                        type="checkbox"
+                        checked={si.completed}
+                        onChange={() => setSubItems(prev => prev.map(s => s.id === si.id ? { ...s, completed: !s.completed } : s))}
+                        className="w-4 h-4 accent-success cursor-pointer"
+                      />
+                      <span className={`flex-1 text-sm font-mono ${si.completed ? 'line-through text-text-muted/60' : 'text-text-main'}`}>
+                        {si.text}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => removeCreateSubItem(si.id)}
+                        className="text-text-muted hover:text-error transition-colors"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ))}
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={newSubItemText}
+                      onChange={(e) => setNewSubItemText(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addCreateSubItem(); } }}
+                      placeholder="ADICIONAR SUBTAREFA..."
+                      className="flex-1 bg-surface border border-border-subtle px-3 py-2 text-sm font-mono text-text-main focus:outline-none focus:border-error transition-colors placeholder:text-text-muted/50 uppercase"
+                    />
+                    <button
+                      type="button"
+                      onClick={addCreateSubItem}
+                      className="bg-surface border border-border-subtle px-3 py-2 text-text-muted hover:text-error hover:border-error transition-colors"
+                    >
+                      <Plus className="w-4 h-4" />
+                    </button>
                   </div>
                 </div>
               </div>
