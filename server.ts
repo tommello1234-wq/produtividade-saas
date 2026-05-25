@@ -260,7 +260,9 @@ export function createApiApp(): Express {
       }
 
       // ============= VENDAS (CHARGE) =============
-      else if (event.type === 'charge.succeeded' || event.type === 'payment_intent.succeeded') {
+      // Só ouvimos charge.succeeded — payment_intent.succeeded dispara pra mesma venda
+      // e geraria duplicata (ID diferente: pi_xxx vs ch_xxx)
+      else if (event.type === 'charge.succeeded') {
         const obj = event.data.object as Stripe.Charge | Stripe.PaymentIntent;
         const id = obj.id;
         if (await alreadyExists(id)) return res.json({ received: true, deduped: true });
