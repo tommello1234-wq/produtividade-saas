@@ -797,7 +797,12 @@ export default function Vendas() {
   const groupedSalesMap = new Map<string, { id: string, description: string, amount: number, date: string, count: number, isManual: boolean, originalTxId: string }>();
 
   filteredTxs.forEach(tx => {
-    let cleanDesc = tx.description.replace('[Asaas] ', '').replace('[Receita] ', '').replace(/\(ID: .*\)/, '').trim();
+    let cleanDesc = tx.description
+      .replace('[Asaas] ', '')
+      .replace('[Ticto] ', '')
+      .replace('[Stripe] ', '')
+      .replace('[Receita] ', '')
+      .replace(/\(ID: .*\)/, '').trim();
     cleanDesc = cleanDesc.replace(/^Parcela \d+ de \d+\.\s*/i, '');
 
     const isManual = tx.description.includes('[Receita]');
@@ -925,6 +930,7 @@ export default function Vendas() {
     const v = sign * Math.abs(tx.amount);
     if (tx.description.includes('[Asaas]')) bucket.asaas += v;
     else if (tx.description.includes('[Ticto]')) bucket.ticto += v;
+    else if (tx.description.includes('[Stripe]')) bucket.asaas += v; // contabiliza Stripe junto com Asaas no grafico
     else if (tx.description.includes('[Receita]')) bucket.manual += v;
     bucket.amount += v;
     dailyDataMap.set(dateStr, bucket);
