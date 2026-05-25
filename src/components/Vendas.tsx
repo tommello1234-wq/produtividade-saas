@@ -45,6 +45,7 @@ export default function Vendas() {
   const [isSyncingAsaas, setIsSyncingAsaas] = useState(false);
   const [isSyncingContaSimples, setIsSyncingContaSimples] = useState(false);
   const [isSyncingTicto, setIsSyncingTicto] = useState(false);
+  const [isSyncingStripe, setIsSyncingStripe] = useState(false);
   const [syncMessage, setSyncMessage] = useState<{type: 'success' | 'error' | 'info', text: string} | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [isImportingExpenses, setIsImportingExpenses] = useState(false);
@@ -181,6 +182,36 @@ export default function Vendas() {
       setSyncMessage({ type: 'error', text: 'Erro ao sincronizar com o Ticto.' });
     } finally {
       setIsSyncingTicto(false);
+      setTimeout(() => setSyncMessage(null), 6000);
+    }
+  };
+
+  const handleSyncStripe = async () => {
+    if (!userId) return;
+    setIsSyncingStripe(true);
+    setSyncMessage(null);
+    try {
+      const res = await fetch('/api/stripe/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setSyncMessage({ type: 'error', text: data.error });
+      } else if (data.count === 0) {
+        setSyncMessage({ type: 'info', text: data.message || 'Nada novo da Stripe.' });
+      } else {
+        setSyncMessage({
+          type: 'success',
+          text: `Stripe: ${data.count} novas (${data.saques || 0} saques, ${data.charges || 0} vendas).`,
+        });
+        fetchData();
+      }
+    } catch (e) {
+      setSyncMessage({ type: 'error', text: 'Erro ao sincronizar com a Stripe.' });
+    } finally {
+      setIsSyncingStripe(false);
       setTimeout(() => setSyncMessage(null), 6000);
     }
   };
@@ -589,12 +620,14 @@ export default function Vendas() {
   // - cnpjExpenses: despesas manuais ([CNPJ]) — aba MANUAIS lado saídas
   const asaasTxs = transactions.filter(tx =>
     tx.description.includes('[Asaas]') ||   // não casa com [Saque Asaas] (bracket diferente)
-    tx.description.includes('[Ticto]')
+    tx.description.includes('[Ticto]') ||
+    tx.description.includes('[Stripe]')     // vendas Stripe entram na mesma aba
   );
   const manualIncomes = transactions.filter(tx =>
     tx.description.includes('[Receita]') ||
     tx.description.includes('[Saque Asaas]') ||
-    tx.description.includes('[Saque Ticto]')
+    tx.description.includes('[Saque Ticto]') ||
+    tx.description.includes('[Saque Stripe]')
   );
   const cnpjExpenses = transactions.filter(tx => tx.description.includes('[CNPJ]'));
 
@@ -955,11 +988,11 @@ export default function Vendas() {
             <div className="relative" ref={syncMenuRef}>
               <button
                 onClick={() => setShowSyncMenu((v) => !v)}
-                disabled={isSyncingAsaas || isSyncingContaSimples || isSyncingTicto}
+                disabled={isSyncingAsaas || isSyncingContaSimples || isSyncingTicto || isSyncingStripe}
                 className="bg-surface border border-border-subtle text-text-muted hover:text-text-main hover:bg-surface-2 px-3 py-2 text-xs font-mono tracking-[0.1em] uppercase transition-colors flex items-center gap-2 disabled:opacity-50"
                 title="Sincronizar manualmente (normalmente é automático)"
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${(isSyncingAsaas || isSyncingContaSimples || isSyncingTicto) ? 'animate-spin' : ''}`} />
+                <RefreshCw className={`w-3.5 h-3.5 ${(isSyncingAsaas || isSyncingContaSimples || isSyncingTicto || isSyncingStripe) ? 'animate-spin' : ''}`} />
                 Sincronizar
                 <ChevronDown className="w-3 h-3" />
               </button>
@@ -1000,6 +1033,17 @@ export default function Vendas() {
                       <span className="text-[9px] font-mono text-success">AUTO via webhook</span>
                     </div>
                     <div className="text-[10px] text-text-muted mt-0.5">Forçar sync via OAuth (últimos 90 dias)</div>
+                  </button>
+                  <button
+                    onClick={() => { setShowSyncMenu(false); handleSyncStripe(); }}
+                    disabled={isSyncingStripe}
+                    className="w-full text-left px-3 py-2.5 hover:bg-surface-2 transition-colors disabled:opacity-50"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-text-main">Stripe</span>
+                      <span className="text-[9px] font-mono text-success">AUTO via webhook</span>
+                    </div>
+                    <div className="text-[10px] text-text-muted mt-0.5">Forçar sync (saques + vendas)</div>
                   </button>
                 </div>
               )}

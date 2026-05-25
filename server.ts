@@ -1,5 +1,6 @@
 import express, { type Express } from "express";
 import { createClient } from '@supabase/supabase-js';
+import Stripe from 'stripe';
 import dotenv from 'dotenv';
 import path from 'path';
 
@@ -29,8 +30,11 @@ const supabase = supabaseUrl && supabaseServiceKey
 export function createApiApp(): Express {
   const app = express();
 
-  // Middleware to parse JSON bodies
-  app.use(express.json({ limit: '20mb' }));
+  // Middleware to parse JSON bodies — também captura raw body pra verificação de assinatura (Stripe)
+  app.use(express.json({
+    limit: '20mb',
+    verify: (req: any, _res, buf) => { req.rawBody = buf; }
+  }));
 
   // Webhook endpoint for Asaas
   app.post("/api/webhook/asaas/:userId", async (req, res) => {
@@ -150,6 +154,189 @@ export function createApiApp(): Express {
     } catch (error: any) {
       console.error('Webhook error:', error);
       res.status(500).json({ error: 'Internal server error', details: error?.message });
+    }
+  });
+
+  // ----------------- STRIPE WEBHOOK + SYNC -----------------
+  // Recebe eventos da Stripe e grava como receita/saque em financial_transactions.
+  //   payout.paid          → saque ([Saque Stripe])
+  //   charge.succeeded     → venda ([Stripe])
+  //   payment_intent.succeeded (alternativa a charge.succeeded em alguns setups)
+  // URL pra cadastrar no painel Stripe: https://SEU-DOMINIO/api/webhook/stripe/SEU_USER_ID
+  // Env vars: STRIPE_SECRET_KEY (sk_live_...) e STRIPE_WEBHOOK_SECRET (whsec_...)
+  const getStripe = () => {
+    const key = process.env.STRIPE_SECRET_KEY;
+    if (!key) return null;
+    return new Stripe(key);
+  };
+
+  app.post("/api/webhook/stripe/:userId", async (req: any, res) => {
+    try {
+      const { userId } = req.params;
+      const stripe = getStripe();
+      const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+      if (!stripe || !webhookSecret) {
+        console.error('Stripe não configurada (STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET)');
+        return res.status(500).json({ error: 'Stripe não configurada' });
+      }
+      if (!supabase) return res.status(500).json({ error: 'Database not configured' });
+
+      // Verifica assinatura com o raw body capturado pelo verify do express.json
+      const sig = req.headers['stripe-signature'] as string;
+      let event: Stripe.Event;
+      try {
+        event = stripe.webhooks.constructEvent(req.rawBody || Buffer.from(JSON.stringify(req.body)), sig, webhookSecret);
+      } catch (err: any) {
+        console.error('Stripe webhook signature failed:', err?.message);
+        return res.status(400).json({ error: `Webhook signature failed: ${err?.message}` });
+      }
+
+      console.log(`Received Stripe webhook for user ${userId}: ${event.type}`);
+
+      const alreadyExists = async (id: string) => {
+        const { data } = await supabase!
+          .from('financial_transactions')
+          .select('id')
+          .eq('user_id', userId)
+          .like('description', `%(ID: ${id})%`)
+          .limit(1);
+        return !!(data && data.length);
+      };
+
+      // ============= SAQUES (PAYOUT) =============
+      if (event.type === 'payout.paid') {
+        const payout = event.data.object as Stripe.Payout;
+        if (await alreadyExists(payout.id)) return res.json({ received: true, deduped: true });
+        const amount = (payout.amount || 0) / 100; // Stripe usa centavos
+        const date = payout.arrival_date
+          ? new Date(payout.arrival_date * 1000).toISOString().split('T')[0]
+          : new Date().toISOString().split('T')[0];
+        const bank = (payout as any).destination_details?.card?.bank_name || (payout as any).method || 'Stripe';
+        const newTx = {
+          user_id: userId,
+          description: `[Saque Stripe] ${payout.description || `Payout ${bank}`} (ID: ${payout.id})`,
+          category: 'Saque Stripe|#635BFF',
+          amount: Math.abs(amount),
+          type: 'income',
+          date,
+        };
+        const { error } = await supabase.from('financial_transactions').insert([newTx]);
+        if (error) {
+          console.error('Error inserting Stripe payout:', error);
+          return res.status(500).json({ error: 'Failed to insert payout', details: error.message });
+        }
+        console.log(`Recorded Stripe saque ${payout.id} (R$ ${amount}) for user ${userId}`);
+      }
+
+      // ============= VENDAS (CHARGE) =============
+      else if (event.type === 'charge.succeeded' || event.type === 'payment_intent.succeeded') {
+        const obj = event.data.object as Stripe.Charge | Stripe.PaymentIntent;
+        const id = obj.id;
+        if (await alreadyExists(id)) return res.json({ received: true, deduped: true });
+        const amount = (obj.amount || (obj as any).amount_received || 0) / 100;
+        const description = (obj as any).description || (obj as any).statement_descriptor || 'Venda Stripe';
+        const created = obj.created ? new Date(obj.created * 1000).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+        const newTx = {
+          user_id: userId,
+          description: `[Stripe] ${description} (ID: ${id})`,
+          category: 'Vendas|#635BFF',
+          amount: Math.abs(amount),
+          type: 'income',
+          date: created,
+        };
+        const { error } = await supabase.from('financial_transactions').insert([newTx]);
+        if (error) {
+          console.error('Error inserting Stripe charge:', error);
+          return res.status(500).json({ error: 'Failed to insert charge', details: error.message });
+        }
+        console.log(`Recorded Stripe sale ${id} (R$ ${amount}) for user ${userId}`);
+      }
+
+      else {
+        console.log(`Stripe event not handled: ${event.type}`);
+      }
+
+      res.json({ received: true });
+    } catch (error: any) {
+      console.error('Stripe webhook error:', error);
+      res.status(500).json({ error: 'Internal server error', details: error?.message });
+    }
+  });
+
+  // Sync histórico Stripe — backfill de payouts e charges
+  app.post("/api/stripe/sync", async (req, res) => {
+    try {
+      const { userId } = req.body || {};
+      const stripe = getStripe();
+      if (!stripe) return res.status(400).json({ error: 'STRIPE_SECRET_KEY não configurada' });
+      if (!userId) return res.status(400).json({ error: 'userId obrigatório' });
+      if (!supabase) return res.status(500).json({ error: 'Database not configured' });
+
+      // Busca IDs já gravados pra dedup
+      const { data: existing } = await supabase
+        .from('financial_transactions')
+        .select('description')
+        .eq('user_id', userId)
+        .or('description.ilike.%[Stripe]%,description.ilike.%[Saque Stripe]%');
+
+      const existingIds = new Set<string>();
+      (existing || []).forEach((row: any) => {
+        const m = String(row.description).match(/\(ID:\s*([^)]+)\)/);
+        if (m) existingIds.add(m[1]);
+      });
+
+      const newTxs: any[] = [];
+      let saquesCount = 0;
+      let chargesCount = 0;
+
+      // Payouts (saques)
+      for await (const p of stripe.payouts.list({ limit: 100, status: 'paid' })) {
+        if (existingIds.has(p.id)) continue;
+        const amount = (p.amount || 0) / 100;
+        const date = p.arrival_date ? new Date(p.arrival_date * 1000).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+        newTxs.push({
+          user_id: userId,
+          description: `[Saque Stripe] ${p.description || 'Payout Stripe'} (ID: ${p.id})`,
+          category: 'Saque Stripe|#635BFF',
+          amount: Math.abs(amount),
+          type: 'income',
+          date,
+        });
+        saquesCount++;
+      }
+
+      // Charges (vendas)
+      for await (const c of stripe.charges.list({ limit: 100 })) {
+        if (!c.paid || c.refunded || c.status !== 'succeeded') continue;
+        if (existingIds.has(c.id)) continue;
+        const amount = (c.amount || 0) / 100;
+        const date = c.created ? new Date(c.created * 1000).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+        newTxs.push({
+          user_id: userId,
+          description: `[Stripe] ${c.description || c.statement_descriptor || 'Venda Stripe'} (ID: ${c.id})`,
+          category: 'Vendas|#635BFF',
+          amount: Math.abs(amount),
+          type: 'income',
+          date,
+        });
+        chargesCount++;
+      }
+
+      if (newTxs.length === 0) {
+        return res.json({ success: true, count: 0, message: 'Nenhuma transação nova.' });
+      }
+
+      const { error } = await supabase.from('financial_transactions').insert(newTxs);
+      if (error) {
+        console.error('Stripe sync insert error:', error);
+        return res.status(500).json({ error: 'Falha ao inserir', details: error.message });
+      }
+
+      res.json({ success: true, count: newTxs.length, saques: saquesCount, charges: chargesCount });
+    } catch (error: any) {
+      console.error('Stripe sync exception:', error);
+      res.status(500).json({ error: error?.message || 'Erro interno' });
     }
   });
 
