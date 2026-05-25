@@ -39,9 +39,13 @@ interface Treasure {
 let cachedStocks: any[] | null = null;
 let cachedFiis: any[] | null = null;
 
-export default function Finances() {
+interface FinancesProps {
+  embedded?: boolean; // se true, mostra só a seção de Transações (sem header/sub-tabs)
+}
+
+export default function Finances({ embedded = false }: FinancesProps = {}) {
   const [activeTab, setActiveTab] = useState<SubTab>(() => {
-    // Permite outra tela (ex: Vendas) navegar pra "Contas (CPF)" via sessionStorage
+    if (embedded) return 'transactions';
     const initial = typeof window !== 'undefined' ? sessionStorage.getItem('finances:initialSubTab') : null;
     if (initial) {
       sessionStorage.removeItem('finances:initialSubTab');
@@ -2122,6 +2126,15 @@ export default function Finances() {
 
   if (loading) {
     return <div className="p-12 text-center font-mono text-text-muted">CARREGANDO DADOS DO SUPABASE...</div>;
+  }
+
+  // Modo embedded: só renderiza a aba de transações, sem hero nem sub-tabs
+  if (embedded) {
+    return (
+      <div className="space-y-8 pb-12 relative">
+        {renderTransactions()}
+      </div>
+    );
   }
 
   return (

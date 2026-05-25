@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { DollarSign, Calendar, TrendingUp, Activity, Filter, Plus, X, Trash2, Edit2, RefreshCw, ChevronDown } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import Finances from './Finances';
 
 interface Transaction {
   id: string;
@@ -20,7 +21,7 @@ export default function Vendas() {
   const [expandedExpenseMonths, setExpandedExpenseMonths] = useState<Record<string, boolean>>({});
   
   // New state for Empresa tabs
-  const [activeTab, setActiveTab] = useState<'receitas' | 'despesas'>('receitas');
+  const [activeTab, setActiveTab] = useState<'receitas' | 'despesas' | 'cpf'>('receitas');
   
   // New state for Manual Expenses
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
@@ -1107,11 +1108,12 @@ export default function Vendas() {
           CONTAS (CNPJ)
         </button>
         <button
-          onClick={() => {
-            sessionStorage.setItem('finances:initialSubTab', 'transactions');
-            window.dispatchEvent(new CustomEvent('app:navigate-tab', { detail: 'tesouro' }));
-          }}
-          className="px-6 py-4 text-[11px] font-mono tracking-[0.1em] uppercase transition-colors border-b-2 whitespace-nowrap text-text-muted border-transparent hover:text-text-main hover:bg-surface"
+          onClick={() => setActiveTab('cpf')}
+          className={`px-6 py-4 text-[11px] font-mono tracking-[0.1em] uppercase transition-colors border-b-2 whitespace-nowrap ${
+            activeTab === 'cpf'
+              ? 'text-accent border-accent bg-accent/5'
+              : 'text-text-muted border-transparent hover:text-text-main hover:bg-surface'
+          }`}
         >
           CONTAS (CPF)
         </button>
@@ -2043,6 +2045,12 @@ export default function Vendas() {
               </button>
             </form>
           </div>
+        </div>
+      )}
+
+      {activeTab === 'cpf' && (
+        <div className="animate-in fade-in duration-300">
+          <Finances embedded />
         </div>
       )}
 
