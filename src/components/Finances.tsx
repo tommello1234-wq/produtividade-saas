@@ -885,42 +885,84 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
   // somando o valor atual dos investimentos como linha de base (o histórico
   // de preço de ativo a gente não tem, então tratamos os ativos como
   // constantes — é o melhor que dá sem ferro de cotação histórica).
+  const [snapshots, setSnapshots] = useState<{ date: string; total: number }[]>([]);
+
   const patrimonyHistory = useMemo(() => {
-    const periodMap = { '1M': 1, '3M': 3, '6M': 6, '1A': 12 };
-    const monthsBack = periodMap[patrimonyPeriod];
+    const periodMap = { '1M': 30, '3M': 90, '6M': 180, '1A': 365 };
+    const daysBack = periodMap[patrimonyPeriod];
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - daysBack);
 
-    const assetsTotal = assets.reduce(
-      (sum, a) => sum + Number(a.qtd || 0) * Number(a.cotacao || 0),
-      0,
-    );
+    // Snapshots dentro do período, ordenados por data ascendente
+    const filtered = snapshots
+      .filter((s) => new Date(s.date) >= cutoff)
+      .sort((a, b) => a.date.localeCompare(b.date));
 
-    const sortedTxs = [...transactions].sort(
-      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
-    );
-
-    const now = new Date();
-    const points: { month: string; total: number }[] = [];
-
-    for (let i = monthsBack - 1; i >= 0; i--) {
-      // Último dia do mês "now - i"
-      const endOfMonth = new Date(now.getFullYear(), now.getMonth() - i + 1, 0);
-      const cashUntil = sortedTxs
-        .filter((t) => new Date(t.date) <= endOfMonth)
-        .reduce(
-          (acc, t) =>
-            acc + (t.type === 'income' ? Number(t.amount) : -Number(t.amount)),
-          0,
-        );
-
-      const monthLabel = endOfMonth
-        .toLocaleString('pt-BR', { month: 'short' })
-        .replace('.', '')
-        .replace(/^./, (c) => c.toUpperCase());
-
-      points.push({ month: monthLabel, total: cashUntil + assetsTotal });
+    if (filtered.length === 0) {
+      // Sem histórico ainda — mostra ponto atual só
+      const assetsTotal = assets.reduce((sum, a) => sum + Number(a.qtd || 0) * Number(a.cotacao || 0), 0);
+      const cashTotal = transactions.reduce(
+        (acc, t) => acc + (t.type === 'income' ? Number(t.amount) : -Number(t.amount)),
+        0,
+      );
+      const todayLabel = new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }).replace('.', '');
+      return [{ month: todayLabel, total: cashTotal + assetsTotal }];
     }
-    return points;
-  }, [patrimonyPeriod, transactions, assets]);
+
+    return filtered.map((s) => {
+      const d = new Date(s.date);
+      const label = d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }).replace('.', '');
+      return { month: label, total: Number(s.total) };
+    });
+  }, [patrimonyPeriod, transactions, assets, snapshots]);
+
+  // Carrega histórico de snapshots ao iniciar
+  useEffect(() => {
+    const loadSnapshots = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data } = await supabase
+        .from('patrimony_snapshots')
+        .select('date, total')
+        .eq('user_id', user.id)
+        .order('date', { ascending: true });
+      if (data) setSnapshots(data.map((d: any) => ({ date: d.date, total: Number(d.total) })));
+    };
+    loadSnapshots();
+  }, []);
+
+  // Salva snapshot do dia (upsert) sempre que assets/transactions mudarem
+  const lastSnapshotRef = useRef<number>(0);
+  useEffect(() => {
+    if (assets.length === 0 && transactions.length === 0) return;
+    const now = Date.now();
+    // Evita salvar mais de uma vez por minuto (debounce simples)
+    if (now - lastSnapshotRef.current < 60_000) return;
+    lastSnapshotRef.current = now;
+
+    const saveSnapshot = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const assetsTotal = assets.reduce((sum, a) => sum + Number(a.qtd || 0) * Number(a.cotacao || 0), 0);
+      const cashTotal = transactions.reduce(
+        (acc, t) => acc + (t.type === 'income' ? Number(t.amount) : -Number(t.amount)),
+        0,
+      );
+      const total = assetsTotal + cashTotal;
+      const today = new Date().toISOString().split('T')[0];
+
+      await supabase.from('patrimony_snapshots').upsert(
+        { user_id: user.id, date: today, total, assets_total: assetsTotal, cash_total: cashTotal },
+        { onConflict: 'user_id,date' },
+      );
+      // Atualiza estado local pro grafico refletir
+      setSnapshots((prev) => {
+        const filtered = prev.filter((s) => s.date !== today);
+        return [...filtered, { date: today, total }].sort((a, b) => a.date.localeCompare(b.date));
+      });
+    };
+    saveSnapshot();
+  }, [assets, transactions]);
 
   const handleSync = async () => {
     setIsSyncingAsaas(true);
