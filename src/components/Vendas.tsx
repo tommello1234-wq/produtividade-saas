@@ -909,7 +909,7 @@ export default function Vendas() {
 
   // Group by Day for the chart — agora mantém breakdown por origem (Asaas vs Ticto)
   // pra tooltip mostrar a divisão. `amount` total continua sendo o valor da barra.
-  type DailyBucket = { asaas: number; ticto: number; manual: number; amount: number };
+  type DailyBucket = { asaas: number; ticto: number; stripe: number; manual: number; amount: number };
   const dailyDataMap = new Map<string, DailyBucket>();
 
   // Initialize dates based on filter to show empty days too
@@ -920,19 +920,19 @@ export default function Vendas() {
       const d = new Date(today);
       d.setDate(today.getDate() - i);
       const dateStr = d.toISOString().split('T')[0];
-      dailyDataMap.set(dateStr, { asaas: 0, ticto: 0, manual: 0, amount: 0 });
+      dailyDataMap.set(dateStr, { asaas: 0, ticto: 0, stripe: 0, manual: 0, amount: 0 });
     }
   }
 
   filteredTxs.forEach(tx => {
     const dateStr = tx.date.split('T')[0];
-    const bucket = dailyDataMap.get(dateStr) || { asaas: 0, ticto: 0, manual: 0, amount: 0 };
+    const bucket = dailyDataMap.get(dateStr) || { asaas: 0, ticto: 0, stripe: 0, manual: 0, amount: 0 };
     // Vendas somam, estornos subtraem (mostra receita líquida real)
     const sign = tx.type === 'expense' ? -1 : 1;
     const v = sign * Math.abs(tx.amount);
-    if (tx.description.includes('[Asaas]')) bucket.asaas += v;
+    if (tx.description.includes('[Stripe]')) bucket.stripe += v;
+    else if (tx.description.includes('[Asaas]')) bucket.asaas += v;
     else if (tx.description.includes('[Ticto]')) bucket.ticto += v;
-    else if (tx.description.includes('[Stripe]')) bucket.asaas += v; // contabiliza Stripe junto com Asaas no grafico
     else if (tx.description.includes('[Receita]')) bucket.manual += v;
     bucket.amount += v;
     dailyDataMap.set(dateStr, bucket);
@@ -1182,6 +1182,11 @@ export default function Vendas() {
                         {d.ticto > 0 && (
                           <div className="text-[10px] text-info flex justify-between gap-3">
                             <span>● Ticto</span><span>{fmt(d.ticto)}</span>
+                          </div>
+                        )}
+                        {d.stripe > 0 && (
+                          <div className="text-[10px] flex justify-between gap-3" style={{ color: '#635BFF' }}>
+                            <span>● Stripe</span><span>{fmt(d.stripe)}</span>
                           </div>
                         )}
                         {d.manual > 0 && (
