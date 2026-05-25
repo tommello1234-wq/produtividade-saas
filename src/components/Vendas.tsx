@@ -314,6 +314,8 @@ export default function Vendas() {
         tx.description.includes('[Saque Asaas]') ||
         tx.description.includes('[Ticto]') ||
         tx.description.includes('[Saque Ticto]') ||
+        tx.description.includes('[Stripe]') ||
+        tx.description.includes('[Saque Stripe]') ||
         tx.description.includes('[CNPJ]') ||
         tx.description.includes('[Receita]')
       );
