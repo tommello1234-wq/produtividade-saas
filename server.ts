@@ -355,10 +355,10 @@ export function createApiApp(): Express {
         saquesCount++;
       }
 
-      // Charges (vendas) — expande invoice pra resolver nome de produto real
+      // Charges (vendas) — resolve nome via resolveStripeProductName (graceful fallback)
       // Charges reembolsados são REMOVIDOS do DB se já existirem (limpeza retroativa)
       const refundedIds: string[] = [];
-      for await (const c of stripe.charges.list({ limit: 100, expand: ['data.invoice'] })) {
+      for await (const c of stripe.charges.list({ limit: 100 })) {
         if (c.refunded) {
           refundedIds.push(c.id);
           continue;
