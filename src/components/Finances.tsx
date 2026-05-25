@@ -931,6 +931,49 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
     loadSnapshots();
   }, []);
 
+  // Backfill: se temos < 2 snapshots, geramos snapshots mensais retroativos baseados nas transações.
+  // Ativos usam valor atual (não temos histórico de cotação), cash flow é real por mês.
+  const backfilledRef = useRef(false);
+  useEffect(() => {
+    if (backfilledRef.current) return;
+    if (snapshots.length >= 2) return;
+    if (assets.length === 0 && transactions.length === 0) return;
+    backfilledRef.current = true;
+
+    const run = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const assetsTotal = assets.reduce((sum, a) => sum + Number(a.qtd || 0) * Number(a.cotacao || 0), 0);
+      const sortedTxs = [...transactions].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+      const now = new Date();
+      const rows: any[] = [];
+      for (let i = 11; i >= 0; i--) {
+        const endOfMonth = new Date(now.getFullYear(), now.getMonth() - i + 1, 0);
+        if (endOfMonth > now) continue;
+        const cashUntil = sortedTxs
+          .filter((t) => new Date(t.date) <= endOfMonth)
+          .reduce((acc, t) => acc + (t.type === 'income' ? Number(t.amount) : -Number(t.amount)), 0);
+        const dateStr = endOfMonth.toISOString().split('T')[0];
+        rows.push({
+          user_id: user.id,
+          date: dateStr,
+          total: cashUntil + assetsTotal,
+          assets_total: assetsTotal,
+          cash_total: cashUntil,
+        });
+      }
+      if (rows.length === 0) return;
+      await supabase.from('patrimony_snapshots').upsert(rows, { onConflict: 'user_id,date' });
+      setSnapshots((prev) => {
+        const map = new Map(prev.map((s) => [s.date, s]));
+        rows.forEach((r) => map.set(r.date, { date: r.date, total: Number(r.total) }));
+        return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
+      });
+    };
+    run();
+  }, [snapshots.length, assets, transactions]);
+
   // Salva snapshot do dia (upsert) sempre que assets/transactions mudarem
   const lastSnapshotRef = useRef<number>(0);
   useEffect(() => {
