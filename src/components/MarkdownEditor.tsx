@@ -108,16 +108,22 @@ export default function MarkdownEditor({ value, onChange, placeholder, minHeight
     if (isFullscreen) refreshOutline();
   };
 
-  // Fold/expand de seção: recolhe os irmãos até o próximo título de nível <=
+  // Fold/expand do H1: recolhe os blocos até o PRÓXIMO H1.
+  // Robusto a wrappers: opera nos filhos diretos do editor.
   const toggleFold = (heading: HTMLElement) => {
-    const lvl = Number(heading.tagName[1]);
+    const root = getActive();
+    if (!root) return;
+    // sobe até o bloco que é filho direto do editor
+    let node: HTMLElement = heading;
+    while (node.parentElement && node.parentElement !== root) node = node.parentElement;
+    const blocks = Array.from(root.children) as HTMLElement[];
+    const idx = blocks.indexOf(node);
+    if (idx === -1) return;
     const collapsed = heading.getAttribute('data-collapsed') === '1';
-    let el = heading.nextElementSibling as HTMLElement | null;
-    while (el) {
-      const m = el.tagName.match(/^H([1-3])$/);
-      if (m && Number(m[1]) <= lvl) break;
-      el.style.display = collapsed ? '' : 'none';
-      el = el.nextElementSibling as HTMLElement | null;
+    const isH1Block = (b: HTMLElement) => b.tagName === 'H1' || !!b.querySelector('h1');
+    for (let i = idx + 1; i < blocks.length; i++) {
+      if (isH1Block(blocks[i])) break;
+      blocks[i].style.display = collapsed ? '' : 'none';
     }
     heading.setAttribute('data-collapsed', collapsed ? '0' : '1');
   };
