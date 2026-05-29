@@ -102,9 +102,22 @@ export default function MarkdownEditor({ value, onChange, placeholder, minHeight
     return clone.innerHTML;
   };
 
+  // Desembrulha <div> wrappers do contentEditable pra manter os blocos como filhos diretos.
+  // Sem isso, o navegador às vezes envolve o conteúdo em divs e o fold/alinhamento bugam.
+  const normalizeBlocks = (root: HTMLElement) => {
+    const divs = Array.from(root.querySelectorAll('div'));
+    for (const div of divs) {
+      if (!div.parentNode) continue;
+      while (div.firstChild) div.parentNode.insertBefore(div.firstChild, div);
+      div.remove();
+    }
+  };
+
   const emit = () => {
     const el = getActive();
-    if (el) onChange(cleanHtml(el));
+    if (!el) return;
+    normalizeBlocks(el);
+    onChange(cleanHtml(el));
     if (isFullscreen) refreshOutline();
   };
 
