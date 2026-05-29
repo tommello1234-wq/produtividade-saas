@@ -108,22 +108,27 @@ export default function MarkdownEditor({ value, onChange, placeholder, minHeight
     if (isFullscreen) refreshOutline();
   };
 
-  // Fold/expand do H1: recolhe os blocos até o PRÓXIMO H1.
-  // Robusto a wrappers: opera nos filhos diretos do editor.
+  // Fold/expand do H1: percorre o editor em ordem (TreeWalker) e esconde cada bloco
+  // até encontrar o próximo H1. Funciona mesmo com wrappers/aninhamentos.
   const toggleFold = (heading: HTMLElement) => {
     const root = getActive();
     if (!root) return;
-    // sobe até o bloco que é filho direto do editor
-    let node: HTMLElement = heading;
-    while (node.parentElement && node.parentElement !== root) node = node.parentElement;
-    const blocks = Array.from(root.children) as HTMLElement[];
-    const idx = blocks.indexOf(node);
-    if (idx === -1) return;
     const collapsed = heading.getAttribute('data-collapsed') === '1';
-    const isH1Block = (b: HTMLElement) => b.tagName === 'H1' || !!b.querySelector('h1');
-    for (let i = idx + 1; i < blocks.length; i++) {
-      if (isH1Block(blocks[i])) break;
-      blocks[i].style.display = collapsed ? '' : 'none';
+    const BLOCKS = new Set(['H1', 'H2', 'H3', 'P', 'UL', 'OL', 'HR', 'BLOCKQUOTE', 'LI']);
+
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+    let started = false;
+    let node = walker.nextNode() as HTMLElement | null;
+    while (node) {
+      if (!started) {
+        if (node === heading) started = true;
+      } else {
+        if (node.tagName === 'H1') break;
+        if (BLOCKS.has(node.tagName)) {
+          node.style.display = collapsed ? '' : 'none';
+        }
+      }
+      node = walker.nextNode() as HTMLElement | null;
     }
     heading.setAttribute('data-collapsed', collapsed ? '0' : '1');
   };
