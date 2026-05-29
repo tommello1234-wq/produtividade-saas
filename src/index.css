@@ -68,7 +68,7 @@
 /* Editor WYSIWYG — estilo documento (Google Docs) */
 .prose-editor { max-width: 80ch; margin: 0; text-align: left; color: #e5e5e5; }
 /* Indenta o editor inteiro — todo o conteúdo alinha numa única margem */
-.wysiwyg-editor { padding-left: 2.5rem; }
+.wysiwyg-editor { padding-left: 4em; }
 .prose-editor > *:first-child { margin-top: 0; }
 .prose-editor h1 {
   font-size: 2.2rem; font-weight: 800; letter-spacing: -0.02em;
