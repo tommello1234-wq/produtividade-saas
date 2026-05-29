@@ -21,7 +21,10 @@ export default function Vendas() {
   const [expandedExpenseMonths, setExpandedExpenseMonths] = useState<Record<string, boolean>>({});
   
   // New state for Empresa tabs
-  const [activeTab, setActiveTab] = useState<'receitas' | 'despesas' | 'cpf'>('receitas');
+  const [activeTab, setActiveTab] = useState<'receitas' | 'despesas' | 'cpf'>(() => {
+    try { return (localStorage.getItem('vendas:activeTab') as any) || 'receitas'; } catch { return 'receitas'; }
+  });
+  useEffect(() => { try { localStorage.setItem('vendas:activeTab', activeTab); } catch {} }, [activeTab]);
   
   // New state for Manual Expenses
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);

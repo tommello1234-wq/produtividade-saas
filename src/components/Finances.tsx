@@ -44,7 +44,11 @@ interface FinancesProps {
 }
 
 export default function Finances({ embedded = false }: FinancesProps = {}) {
-  const [activeTab, setActiveTab] = useState<SubTab>(embedded ? 'transactions' : 'overview');
+  const [activeTab, setActiveTab] = useState<SubTab>(() => {
+    if (embedded) return 'transactions';
+    try { return (localStorage.getItem('finances:activeTab') as SubTab) || 'overview'; } catch { return 'overview'; }
+  });
+  useEffect(() => { if (!embedded) { try { localStorage.setItem('finances:activeTab', activeTab); } catch {} } }, [activeTab, embedded]);
   const [txTab, setTxTab] = useState<'income' | 'expense'>('expense');
   const [loading, setLoading] = useState(true);
   const [expandedMonths, setExpandedMonths] = useState<Record<string, boolean>>({});

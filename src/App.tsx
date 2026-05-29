@@ -27,7 +27,13 @@ export default function App() {
   const [session, setSession] = useState<any>(null);
   const [isTestMode, setIsTestMode] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('vendas'); // Default to vendas for now to show the user
+  // Persiste a aba ativa em localStorage pra sobreviver a refresh
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    try { return localStorage.getItem('app:activeTab') || 'vendas'; } catch { return 'vendas'; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('app:activeTab', activeTab); } catch {}
+  }, [activeTab]);
 
   // Navegação cross-component: outras telas disparam window.dispatchEvent(new CustomEvent('app:navigate-tab', { detail: 'tesouro' }))
   useEffect(() => {
