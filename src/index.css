@@ -97,6 +97,22 @@
 .prose-editor a { color: #f97316; text-decoration: underline; }
 .prose-editor code { background: rgba(255,255,255,0.08); padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.85em; font-family: var(--font-mono); }
 
+/* Fold/dropdown nos títulos (estilo Word/Docs) */
+.wysiwyg-editor h1, .wysiwyg-editor h2, .wysiwyg-editor h3 {
+  position: relative; padding-left: 1.2em;
+}
+.wysiwyg-editor h1::before, .wysiwyg-editor h2::before, .wysiwyg-editor h3::before {
+  content: '▾';
+  position: absolute; left: 0; top: 0.18em;
+  font-size: 0.65em; color: #737373;
+  cursor: pointer; transition: color .15s;
+  line-height: 1.6;
+}
+.wysiwyg-editor h1:hover::before, .wysiwyg-editor h2:hover::before, .wysiwyg-editor h3:hover::before { color: #f97316; }
+.wysiwyg-editor h1[data-collapsed="1"]::before,
+.wysiwyg-editor h2[data-collapsed="1"]::before,
+.wysiwyg-editor h3[data-collapsed="1"]::before { content: '▸'; }
+
 /* WYSIWYG contentEditable placeholder */
 .wysiwyg-editor:empty:before {
   content: attr(data-placeholder);

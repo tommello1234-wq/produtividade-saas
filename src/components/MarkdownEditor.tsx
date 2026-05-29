@@ -90,10 +90,45 @@ export default function MarkdownEditor({ value, onChange, placeholder, minHeight
     heads[idx]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
+  // Salva innerHTML limpo (sem artefatos de fold: display:none e data-collapsed)
+  const cleanHtml = (el: HTMLElement): string => {
+    const clone = el.cloneNode(true) as HTMLElement;
+    clone.querySelectorAll('[data-collapsed]').forEach((n) => n.removeAttribute('data-collapsed'));
+    clone.querySelectorAll('*').forEach((n) => {
+      const e = n as HTMLElement;
+      if (e.style && e.style.display === 'none') e.style.display = '';
+      if (e.getAttribute('style') === '') e.removeAttribute('style');
+    });
+    return clone.innerHTML;
+  };
+
   const emit = () => {
     const el = getActive();
-    if (el) onChange(el.innerHTML);
+    if (el) onChange(cleanHtml(el));
     if (isFullscreen) refreshOutline();
+  };
+
+  // Fold/expand de seção: recolhe os irmãos até o próximo título de nível <=
+  const toggleFold = (heading: HTMLElement) => {
+    const lvl = Number(heading.tagName[1]);
+    const collapsed = heading.getAttribute('data-collapsed') === '1';
+    let el = heading.nextElementSibling as HTMLElement | null;
+    while (el) {
+      const m = el.tagName.match(/^H([1-3])$/);
+      if (m && Number(m[1]) <= lvl) break;
+      el.style.display = collapsed ? '' : 'none';
+      el = el.nextElementSibling as HTMLElement | null;
+    }
+    heading.setAttribute('data-collapsed', collapsed ? '0' : '1');
+  };
+
+  const handleEditorClick = (e: React.MouseEvent) => {
+    const t = e.target as HTMLElement;
+    // clique na "calha" esquerda do título (onde fica a setinha) recolhe/expande
+    if (/^H[1-3]$/.test(t.tagName) && (e.nativeEvent as MouseEvent).offsetX < 22) {
+      e.preventDefault();
+      toggleFold(t);
+    }
   };
 
   const exec = (cmd: string, val?: string) => {
@@ -209,6 +244,7 @@ export default function MarkdownEditor({ value, onChange, placeholder, minHeight
           onInput={emit}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
+          onClick={handleEditorClick}
           data-placeholder={placeholder}
           className="prose-editor wysiwyg-editor text-sm text-text-main px-4 py-3 focus:outline-none overflow-y-auto"
           style={{ minHeight }}
@@ -257,6 +293,7 @@ export default function MarkdownEditor({ value, onChange, placeholder, minHeight
                 onInput={emit}
                 onKeyDown={handleKeyDown}
           onPaste={handlePaste}
+          onClick={handleEditorClick}
                 data-placeholder={placeholder}
                 className="prose-editor wysiwyg-editor text-sm text-text-main px-8 py-6 focus:outline-none overflow-y-auto flex-1"
               />
