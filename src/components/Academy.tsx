@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Plus, MoreHorizontal, Link as LinkIcon, ChevronRight, ChevronDown, Folder, LayoutGrid, Settings, Trash2, Edit2, X, Check, BookOpen, Cloud, AlignLeft, GripVertical, PlayCircle, CheckSquare, ImagePlus, Copy, Calendar, User, Type, ChevronDownCircle, Hash, List, Loader2, Paperclip, PanelLeft, Download } from 'lucide-react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { supabase } from '../lib/supabase';
+import MarkdownEditor from './MarkdownEditor';
 import { MindMapEditor } from './MindMapEditor';
 import { keepInSync, ensureFormat } from '../lib/academyConverters';
 import { createOrGetShare, updateShareData, buildShareUrl } from '../lib/share';
@@ -1819,11 +1820,11 @@ export default function Academy() {
                     <AlignLeft className="w-3 h-3" />
                     Descrição
                   </label>
-                  <textarea 
+                  <MarkdownEditor
                     value={card.description || ''}
-                    onChange={(e) => handleUpdateCard(editingCard.nodeId, editingCard.colId, editingCard.cardId, { description: e.target.value })}
-                    placeholder="Adicione uma descrição mais detalhada..."
-                    className="w-full bg-surface-2 border border-border-subtle px-4 py-3 text-sm text-text-main focus:outline-none focus:border-accent transition-colors min-h-[120px] resize-y"
+                    onChange={(val) => handleUpdateCard(editingCard.nodeId, editingCard.colId, editingCard.cardId, { description: val })}
+                    placeholder="Adicione uma descrição mais detalhada... (suporta markdown: # títulos, **negrito**, - listas)"
+                    minHeight={140}
                   />
                 </div>
 
