@@ -66,7 +66,7 @@
 }
 
 /* Editor WYSIWYG — estilo documento (Google Docs) */
-.prose-editor { max-width: 80ch; margin: 0; text-align: left; color: #e5e5e5; }
+.prose-editor { max-width: 80ch; margin: 0; text-align: left; color: #e5e5e5; padding-left: 1.4em; }
 .prose-editor > *:first-child { margin-top: 0; }
 .prose-editor h1 {
   font-size: 2.2rem; font-weight: 800; letter-spacing: -0.02em;
@@ -97,10 +97,8 @@
 .prose-editor a { color: #f97316; text-decoration: underline; }
 .prose-editor code { background: rgba(255,255,255,0.08); padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.85em; font-family: var(--font-mono); }
 
-/* Fold/dropdown — só no H1 (título principal) */
-.wysiwyg-editor h1 {
-  position: relative; padding-left: 1.2em;
-}
+/* Fold/dropdown — só no H1; texto alinha com o resto, setinha ocupa a calha */
+.wysiwyg-editor h1 { position: relative; margin-left: -1.4em; padding-left: 1.4em; }
 .wysiwyg-editor h1::before {
   content: '▾';
   position: absolute; left: 0; top: 0.2em;
