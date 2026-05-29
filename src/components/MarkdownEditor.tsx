@@ -13,7 +13,8 @@ export default function MarkdownEditor({ value, onChange, placeholder, minHeight
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fsTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [showPreview, setShowPreview] = useState(false);
+  // Abre em modo preview quando já existe conteúdo (mostra formatado direto)
+  const [showPreview, setShowPreview] = useState(() => !!value.trim());
 
   const getRef = () => (isFullscreen ? fsTextareaRef.current : textareaRef.current);
 
