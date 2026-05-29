@@ -124,8 +124,8 @@ export default function MarkdownEditor({ value, onChange, placeholder, minHeight
 
   const handleEditorClick = (e: React.MouseEvent) => {
     const t = e.target as HTMLElement;
-    // clique na "calha" esquerda do título (onde fica a setinha) recolhe/expande
-    if (/^H[1-3]$/.test(t.tagName) && (e.nativeEvent as MouseEvent).offsetX < 22) {
+    // clique na "calha" esquerda do H1 (onde fica a setinha) recolhe/expande a seção
+    if (t.tagName === 'H1' && (e.nativeEvent as MouseEvent).offsetX < 22) {
       e.preventDefault();
       toggleFold(t);
     }
