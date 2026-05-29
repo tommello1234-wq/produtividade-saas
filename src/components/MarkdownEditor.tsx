@@ -113,11 +113,50 @@ export default function MarkdownEditor({ value, onChange, placeholder, minHeight
     if (isFullscreen) refreshOutline();
   };
 
-  // Cola como TEXTO LIMPO (sem estilos/fontes/fundo da origem)
+  // Cola MANTENDO a formatação (títulos, negrito, listas) mas REMOVENDO o lixo
+  // (estilos inline, fundo, fonte, classes). Se não houver HTML, cola texto puro.
+  const sanitizeHtml = (raw: string): string => {
+    const ALLOWED = new Set(['H1', 'H2', 'H3', 'P', 'UL', 'OL', 'LI', 'STRONG', 'B', 'EM', 'I', 'U', 'BLOCKQUOTE', 'BR', 'A', 'HR', 'DIV', 'SPAN']);
+    const tmp = document.createElement('div');
+    tmp.innerHTML = raw;
+
+    const clean = (node: Node) => {
+      const children = Array.from(node.childNodes);
+      for (const child of children) {
+        if (child.nodeType === Node.ELEMENT_NODE) {
+          const el = child as HTMLElement;
+          if (!ALLOWED.has(el.tagName)) {
+            // troca tag não permitida pelo conteúdo (mantém o texto/filhos)
+            const frag = document.createDocumentFragment();
+            while (el.firstChild) frag.appendChild(el.firstChild);
+            el.replaceWith(frag);
+            // re-processa os filhos movidos
+            clean(node);
+            return;
+          }
+          // remove TODOS os atributos exceto href em <a>
+          for (const attr of Array.from(el.attributes)) {
+            if (!(el.tagName === 'A' && attr.name === 'href')) el.removeAttribute(attr.name);
+          }
+          // normaliza b/i pra strong/em
+          clean(el);
+        }
+      }
+    };
+    clean(tmp);
+    return tmp.innerHTML;
+  };
+
   const handlePaste = (e: React.ClipboardEvent) => {
     e.preventDefault();
-    const text = e.clipboardData.getData('text/plain');
-    document.execCommand('insertText', false, text);
+    const html = e.clipboardData.getData('text/html');
+    if (html && html.trim()) {
+      const cleaned = sanitizeHtml(html);
+      document.execCommand('insertHTML', false, cleaned);
+    } else {
+      const text = e.clipboardData.getData('text/plain');
+      document.execCommand('insertText', false, text);
+    }
     emit();
   };
 
