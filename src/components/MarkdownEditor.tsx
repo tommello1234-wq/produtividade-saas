@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Bold, Italic, List, ListOrdered, Quote, Maximize2, Minimize2, Heading1, Heading2, Heading3, Type } from 'lucide-react';
+import { Bold, Italic, List, ListOrdered, Quote, Maximize2, Minimize2, Heading1, Heading2, Heading3, Type, Minus } from 'lucide-react';
 
 interface MarkdownEditorProps {
   value: string;
@@ -101,6 +101,7 @@ export default function MarkdownEditor({ value, onChange, placeholder, minHeight
       <button type="button" onMouseDown={(e) => { e.preventDefault(); exec('insertUnorderedList'); }} className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm" title="Lista"><List className="w-4 h-4" /></button>
       <button type="button" onMouseDown={(e) => { e.preventDefault(); exec('insertOrderedList'); }} className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm" title="Lista numerada"><ListOrdered className="w-4 h-4" /></button>
       <button type="button" onMouseDown={(e) => { e.preventDefault(); block('BLOCKQUOTE'); }} className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm" title="Citação"><Quote className="w-4 h-4" /></button>
+      <button type="button" onMouseDown={(e) => { e.preventDefault(); exec('insertHorizontalRule'); }} className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm" title="Divisória"><Minus className="w-4 h-4" /></button>
       <div className="flex-1" />
       <button type="button" onMouseDown={(e) => { e.preventDefault(); setIsFullscreen((f) => !f); }} className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm" title={isFullscreen ? 'Reduzir' : 'Expandir'}>
         {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
