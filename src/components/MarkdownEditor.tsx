@@ -98,13 +98,34 @@ export default function MarkdownEditor({ value, onChange, placeholder, minHeight
 
   const exec = (cmd: string, val?: string) => {
     const el = getActive();
-    if (el) el.focus();
+    if (!el) return;
+    el.focus();
     document.execCommand(cmd, false, val);
-    // sincroniza ambos os editores
-    const html = el?.innerHTML ?? '';
-    if (editorRef.current) editorRef.current.innerHTML = html;
-    if (fsEditorRef.current && isFullscreen) fsEditorRef.current.innerHTML = html;
+    // NÃO reescreve o innerHTML do editor ativo (preserva o histórico de undo nativo).
+    // Só espelha pro editor inativo.
+    const html = el.innerHTML;
+    if (isFullscreen) {
+      if (editorRef.current) editorRef.current.innerHTML = html;
+    } else {
+      if (fsEditorRef.current) fsEditorRef.current.innerHTML = html;
+    }
     onChange(html);
+    if (isFullscreen) refreshOutline();
+  };
+
+  // Ctrl+Z / Ctrl+Y (e Ctrl+Shift+Z) — usa undo/redo nativo do contentEditable
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    const mod = e.ctrlKey || e.metaKey;
+    if (!mod) return;
+    if (e.key === 'z' && !e.shiftKey) {
+      e.preventDefault();
+      document.execCommand('undo');
+      emit();
+    } else if ((e.key === 'z' && e.shiftKey) || e.key === 'y') {
+      e.preventDefault();
+      document.execCommand('redo');
+      emit();
+    }
   };
 
   const block = (tag: string) => exec('formatBlock', tag);
@@ -139,6 +160,7 @@ export default function MarkdownEditor({ value, onChange, placeholder, minHeight
           contentEditable
           suppressContentEditableWarning
           onInput={emit}
+          onKeyDown={handleKeyDown}
           data-placeholder={placeholder}
           className="prose-editor wysiwyg-editor text-sm text-text-main px-4 py-3 focus:outline-none overflow-y-auto"
           style={{ minHeight }}
@@ -185,6 +207,7 @@ export default function MarkdownEditor({ value, onChange, placeholder, minHeight
                 contentEditable
                 suppressContentEditableWarning
                 onInput={emit}
+                onKeyDown={handleKeyDown}
                 data-placeholder={placeholder}
                 className="prose-editor wysiwyg-editor text-sm text-text-main px-8 py-6 focus:outline-none overflow-y-auto flex-1"
               />
