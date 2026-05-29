@@ -66,7 +66,7 @@
 }
 
 /* Editor WYSIWYG — estilo documento (Google Docs) */
-.prose-editor { max-width: 80ch; margin: 0 auto; color: #e5e5e5; }
+.prose-editor { max-width: 80ch; margin: 0; text-align: left; color: #e5e5e5; }
 .prose-editor > *:first-child { margin-top: 0; }
 .prose-editor h1 {
   font-size: 2.2rem; font-weight: 800; letter-spacing: -0.02em;
@@ -103,10 +103,9 @@
 }
 .wysiwyg-editor h1::before, .wysiwyg-editor h2::before, .wysiwyg-editor h3::before {
   content: '▾';
-  position: absolute; left: 0; top: 0.18em;
-  font-size: 0.65em; color: #737373;
+  position: absolute; left: 0; top: 0.2em;
+  font-size: 0.7em; color: #9ca3af;
   cursor: pointer; transition: color .15s;
-  line-height: 1.6;
 }
 .wysiwyg-editor h1:hover::before, .wysiwyg-editor h2:hover::before, .wysiwyg-editor h3:hover::before { color: #f97316; }
 .wysiwyg-editor h1[data-collapsed="1"]::before,
