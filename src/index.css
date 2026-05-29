@@ -78,3 +78,11 @@
 .prose-editor blockquote { border-left: 3px solid var(--color-accent, #f97316); padding-left: 0.8em; margin: 0.5em 0; color: #9ca3af; }
 .prose-editor a { color: #f97316; text-decoration: underline; }
 .prose-editor code { background: rgba(255,255,255,0.08); padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.85em; }
+
+/* WYSIWYG contentEditable placeholder */
+.wysiwyg-editor:empty:before {
+  content: attr(data-placeholder);
+  color: rgba(156,163,175,0.5);
+  pointer-events: none;
+}
+.wysiwyg-editor { white-space: pre-wrap; word-break: break-word; }
