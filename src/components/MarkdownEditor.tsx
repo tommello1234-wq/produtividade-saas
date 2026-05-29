@@ -113,6 +113,14 @@ export default function MarkdownEditor({ value, onChange, placeholder, minHeight
     if (isFullscreen) refreshOutline();
   };
 
+  // Cola como TEXTO LIMPO (sem estilos/fontes/fundo da origem)
+  const handlePaste = (e: React.ClipboardEvent) => {
+    e.preventDefault();
+    const text = e.clipboardData.getData('text/plain');
+    document.execCommand('insertText', false, text);
+    emit();
+  };
+
   // Ctrl+Z / Ctrl+Y (e Ctrl+Shift+Z) — usa undo/redo nativo do contentEditable
   const handleKeyDown = (e: React.KeyboardEvent) => {
     const mod = e.ctrlKey || e.metaKey;
@@ -161,6 +169,7 @@ export default function MarkdownEditor({ value, onChange, placeholder, minHeight
           suppressContentEditableWarning
           onInput={emit}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           data-placeholder={placeholder}
           className="prose-editor wysiwyg-editor text-sm text-text-main px-4 py-3 focus:outline-none overflow-y-auto"
           style={{ minHeight }}
@@ -208,6 +217,7 @@ export default function MarkdownEditor({ value, onChange, placeholder, minHeight
                 suppressContentEditableWarning
                 onInput={emit}
                 onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
                 data-placeholder={placeholder}
                 className="prose-editor wysiwyg-editor text-sm text-text-main px-8 py-6 focus:outline-none overflow-y-auto flex-1"
               />
