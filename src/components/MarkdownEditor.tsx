@@ -70,9 +70,30 @@ export default function MarkdownEditor({ value, onChange, placeholder, minHeight
 
   const getActive = () => (isFullscreen ? fsEditorRef.current : editorRef.current);
 
+  // Índice de títulos (outline) pra navegação lateral no fullscreen
+  const [outline, setOutline] = useState<{ text: string; level: number }[]>([]);
+  const refreshOutline = () => {
+    const el = getActive();
+    if (!el) { setOutline([]); return; }
+    const heads = Array.from(el.querySelectorAll('h1,h2,h3'));
+    setOutline(heads.map((h) => ({ text: h.textContent || '', level: Number(h.tagName[1]) })));
+  };
+  useEffect(() => {
+    if (isFullscreen) setTimeout(refreshOutline, 50);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFullscreen]);
+
+  const scrollToHeading = (idx: number) => {
+    const el = fsEditorRef.current;
+    if (!el) return;
+    const heads = Array.from(el.querySelectorAll('h1,h2,h3'));
+    heads[idx]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
   const emit = () => {
     const el = getActive();
     if (el) onChange(el.innerHTML);
+    if (isFullscreen) refreshOutline();
   };
 
   const exec = (cmd: string, val?: string) => {
@@ -132,16 +153,42 @@ export default function MarkdownEditor({ value, onChange, placeholder, minHeight
               <Minimize2 className="w-4 h-4" /> Reduzir
             </button>
           </div>
-          <div className="bg-surface-2 border border-border-subtle overflow-hidden flex flex-col flex-1 min-h-0">
-            <Toolbar />
-            <div
-              ref={fsEditorRef}
-              contentEditable
-              suppressContentEditableWarning
-              onInput={emit}
-              data-placeholder={placeholder}
-              className="prose-editor wysiwyg-editor text-sm text-text-main px-6 py-4 focus:outline-none overflow-y-auto flex-1"
-            />
+          <div className="flex flex-1 min-h-0 gap-4">
+            {/* Sidebar de navegação (índice de títulos) */}
+            <aside className="w-60 shrink-0 bg-surface-2 border border-border-subtle overflow-y-auto hidden md:block">
+              <div className="px-4 py-3 border-b border-border-subtle text-[10px] font-mono uppercase tracking-widest text-text-muted">
+                Índice
+              </div>
+              <nav className="py-2">
+                {outline.length === 0 ? (
+                  <div className="px-4 py-2 text-xs text-text-muted/60">Use títulos (H1/H2/H3) pra criar o índice.</div>
+                ) : (
+                  outline.map((h, i) => (
+                    <button
+                      key={i}
+                      onClick={() => scrollToHeading(i)}
+                      className="w-full text-left px-4 py-1.5 text-sm text-text-muted hover:text-accent hover:bg-accent/5 transition-colors truncate"
+                      style={{ paddingLeft: `${16 + (h.level - 1) * 14}px`, fontWeight: h.level === 1 ? 700 : 400 }}
+                      title={h.text}
+                    >
+                      {h.text || '(sem título)'}
+                    </button>
+                  ))
+                )}
+              </nav>
+            </aside>
+
+            <div className="bg-surface-2 border border-border-subtle overflow-hidden flex flex-col flex-1 min-h-0">
+              <Toolbar />
+              <div
+                ref={fsEditorRef}
+                contentEditable
+                suppressContentEditableWarning
+                onInput={emit}
+                data-placeholder={placeholder}
+                className="prose-editor wysiwyg-editor text-sm text-text-main px-8 py-6 focus:outline-none overflow-y-auto flex-1"
+              />
+            </div>
           </div>
         </div>
       )}
