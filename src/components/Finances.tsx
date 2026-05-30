@@ -1628,9 +1628,25 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
 
                         {/* SAÍDAS */}
                         <div className="bg-surface border border-border-subtle overflow-hidden">
-                          <div className="p-4 border-b border-border-subtle bg-surface-2/50 flex justify-between items-center">
-                            <h4 className="text-xs font-bold uppercase tracking-[0.1em] text-danger flex items-center gap-2"><span>▼</span> Saídas</h4>
-                            <span className="text-[10px] font-mono text-text-muted">{m.expenses.length} {m.expenses.length === 1 ? 'item' : 'itens'}</span>
+                          <div className="p-4 border-b border-border-subtle bg-surface-2/50 flex justify-between items-center gap-3">
+                            <h4 className="text-xs font-bold uppercase tracking-[0.1em] text-danger flex items-center gap-2 shrink-0"><span>▼</span> Saídas</h4>
+                            <div className="flex items-center gap-3 shrink-0">
+                              <span className="text-[10px] font-mono text-text-muted">{m.expenses.length} {m.expenses.length === 1 ? 'item' : 'itens'}</span>
+                              <label
+                                className={`bg-info text-bg px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-[0.05em] hover:bg-info/90 transition-colors flex items-center gap-1.5 cursor-pointer ${isImportingFatura ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                title="Importar CSV de fatura/extrato (datas vêm do CSV)"
+                              >
+                                <Activity className={`w-3 h-3 ${isImportingFatura ? 'animate-spin' : ''}`} />
+                                {isImportingFatura ? 'Importando...' : 'Importar Fatura'}
+                                <input
+                                  type="file"
+                                  accept=".csv,text/csv"
+                                  onChange={handleFaturaImport}
+                                  disabled={isImportingFatura}
+                                  className="hidden"
+                                />
+                              </label>
+                            </div>
                           </div>
                           {m.expenses.length === 0 ? (
                             <div className="p-6 text-center text-xs font-mono text-text-muted">Sem saídas neste mês.</div>
