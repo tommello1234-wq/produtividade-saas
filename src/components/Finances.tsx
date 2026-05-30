@@ -1709,11 +1709,71 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                                         <div className="w-[80px]"></div>
                                       </div>
                                     </button>
-                                    {faturaOpen && (
-                                      <div className="bg-surface-2/10 divide-y divide-border-subtle/50">
-                                        {faturaTxs.map((tx) => renderExpenseRow(tx, true))}
-                                      </div>
-                                    )}
+                                    {faturaOpen && (() => {
+                                      // Agrupa Fatura por estabelecimento (remove sufixo numerado "- 17")
+                                      const vendorMap = new Map<string, Transaction[]>();
+                                      faturaTxs.forEach((t) => {
+                                        const name = t.description
+                                          .replace(/^\[Fatura\]\s*/, '')
+                                          .replace(/\s+-\s+\d+$/, '')
+                                          .trim();
+                                        if (!vendorMap.has(name)) vendorMap.set(name, []);
+                                        vendorMap.get(name)!.push(t);
+                                      });
+                                      const groups = Array.from(vendorMap.entries())
+                                        .map(([name, items]) => ({ name, items, total: items.reduce((s, t) => s + Number(t.amount), 0) }))
+                                        .sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
+                                      return (
+                                        <div className="bg-surface-2/10 divide-y divide-border-subtle/50">
+                                          {groups.map((g) => {
+                                            if (g.items.length === 1) return renderExpenseRow(g.items[0], true);
+                                            const vKey = `fatura_${m.key}_${g.name}`;
+                                            const vOpen = !!expandedMonths[vKey];
+                                            return (
+                                              <div key={g.name}>
+                                                <button
+                                                  onClick={() => setExpandedMonths(prev => ({ ...prev, [vKey]: !vOpen }))}
+                                                  className="w-full pl-12 p-4 flex items-center justify-between hover:bg-surface-2/30 transition-colors group bg-surface-2/10 border-l-2 border-l-accent/30"
+                                                >
+                                                  <div className="flex items-center gap-3 min-w-0">
+                                                    <ChevronDown className={`w-3.5 h-3.5 text-text-muted transition-transform shrink-0 ${vOpen ? 'rotate-180 text-accent' : '-rotate-90'}`} />
+                                                    <div className="w-9 h-9 rounded-full bg-danger/10 flex items-center justify-center border border-danger/20 shrink-0">
+                                                      <DollarSign className="w-4 h-4 text-danger" />
+                                                    </div>
+                                                    <div className="min-w-0 text-left">
+                                                      <div className="text-sm font-bold text-white truncate">{g.name}</div>
+                                                      <div className="text-[10px] font-mono text-text-muted">{g.items.length} itens</div>
+                                                    </div>
+                                                  </div>
+                                                  <div className="text-right shrink-0 ml-3 flex items-center gap-2">
+                                                    <div className="text-sm font-mono font-bold text-danger min-w-[140px] text-right">- R$ {Math.abs(g.total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                                                    <div className="w-[80px]"></div>
+                                                  </div>
+                                                </button>
+                                                {vOpen && (
+                                                  <div className="bg-surface-2/5 divide-y divide-border-subtle/30">
+                                                    {g.items.map((t) => (
+                                                      <div key={t.id} className="pl-20 p-3 flex items-center justify-between hover:bg-surface-2/30 transition-colors group">
+                                                        <div className="min-w-0">
+                                                          <div className="text-[11px] font-mono text-text-muted">{formatDateBR(t.date)}</div>
+                                                        </div>
+                                                        <div className="text-right shrink-0 ml-3 flex items-center gap-2">
+                                                          <div className="text-xs font-mono font-bold text-danger min-w-[140px] text-right">- R$ {Math.abs(Number(t.amount)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                                                          <div className="flex items-center justify-end gap-1 w-[80px]">
+                                                            <button onClick={(e) => { e.stopPropagation(); handleEditTx(t); }} className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity"><Edit2 className="w-3.5 h-3.5" /></button>
+                                                            <button onClick={(e) => { e.stopPropagation(); handleDeleteTx(t.id); }} className="p-1.5 text-text-muted hover:text-danger hover:bg-danger/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 className="w-3.5 h-3.5" /></button>
+                                                          </div>
+                                                        </div>
+                                                      </div>
+                                                    ))}
+                                                  </div>
+                                                )}
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      );
+                                    })()}
                                   </>
                                 )}
                                 {regularTxs.map((tx) => renderExpenseRow(tx, false))}
