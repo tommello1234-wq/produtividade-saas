@@ -1653,7 +1653,7 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                           ) : (() => {
                             const faturaTxs = m.expenses.filter(t => t.description.startsWith('[Fatura]'));
                             const regularTxs = m.expenses.filter(t => !t.description.startsWith('[Fatura]'));
-                            const faturaTotal = faturaTxs.reduce((s, t) => s + Math.abs(Number(t.amount)), 0);
+                            const faturaTotal = faturaTxs.reduce((s, t) => s + Number(t.amount), 0);
                             const faturaKey = `fatura_${m.key}`;
                             const faturaOpen = !!expandedMonths[faturaKey];
                             const renderExpenseRow = (tx: Transaction, inner = false) => (

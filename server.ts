@@ -686,8 +686,8 @@ export function createApiApp(): Express {
         })
         // Pula entradas inválidas
         .filter((p: Parsed) => p.amount > 0 && p.vendor !== 'Sem descrição')
-        // Pula "Pagamento recebido" (é o pagamento da fatura anterior, não despesa)
-        .filter((p: Parsed) => !/^pagamento\s+recebido/i.test(p.rawDesc.trim()));
+        // Pula pagamentos da fatura anterior (não são despesas)
+        .filter((p: Parsed) => !/^pagamento\s+(recebido|de\s+fatura)/i.test(p.rawDesc.trim()));
 
       // Charges positivos viram despesas; refunds/estornos negativos viram ENTRADA ([Estorno])
       // pra ficarem visíveis na aba Manuais (sem netting — usuário vê o reembolso separado).
