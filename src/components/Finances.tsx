@@ -1610,13 +1610,17 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
           </div>
         ) : (() => {
           // Agregado geral por categoria (todas as despesas CPF, todos os meses)
-          const aggMap = new Map<string, number>();
+          // Agrupa pelo NOME exibido (não pela string crua), pra "Outros" e variações
+          // de cor da mesma categoria não virarem fatias separadas.
+          const aggMap = new Map<string, { value: number; color: string }>();
           cpfTxs.filter(t => t.type === 'expense').forEach((t) => {
             const c = resolveCategory(t);
-            aggMap.set(c, (aggMap.get(c) || 0) + Math.abs(Number(t.amount)));
+            const name = catName(c);
+            const existing = aggMap.get(name);
+            aggMap.set(name, { value: (existing?.value || 0) + Math.abs(Number(t.amount)), color: existing?.color || catColor(c) });
           });
           const aggData = Array.from(aggMap.entries())
-            .map(([cat, value]) => ({ name: catName(cat), value: Math.round(value * 100) / 100, color: catColor(cat) }))
+            .map(([name, { value, color }]) => ({ name, value: Math.round(value * 100) / 100, color }))
             .filter(d => d.value > 0)
             .sort((a, b) => b.value - a.value);
 
@@ -1714,13 +1718,15 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                     <div className="space-y-4 animate-in fade-in slide-in-from-top-4 duration-300">
                       {/* Pie chart do mês */}
                       {(() => {
-                        const monthMap = new Map<string, number>();
+                        const monthMap = new Map<string, { value: number; color: string }>();
                         m.expenses.forEach((t) => {
                           const c = resolveCategory(t);
-                          monthMap.set(c, (monthMap.get(c) || 0) + Math.abs(Number(t.amount)));
+                          const name = catName(c);
+                          const existing = monthMap.get(name);
+                          monthMap.set(name, { value: (existing?.value || 0) + Math.abs(Number(t.amount)), color: existing?.color || catColor(c) });
                         });
                         const monthData = Array.from(monthMap.entries())
-                          .map(([cat, value]) => ({ name: catName(cat), value: Math.round(value * 100) / 100, color: catColor(cat) }))
+                          .map(([name, { value, color }]) => ({ name, value: Math.round(value * 100) / 100, color }))
                           .filter(d => d.value > 0)
                           .sort((a, b) => b.value - a.value);
                         if (monthData.length === 0) return null;
