@@ -52,6 +52,7 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
   const [txTab, setTxTab] = useState<'income' | 'expense'>('expense');
   const [loading, setLoading] = useState(true);
   const [expandedMonths, setExpandedMonths] = useState<Record<string, boolean>>({});
+  const [categoryPickerFor, setCategoryPickerFor] = useState<string | null>(null);
   
   // Modals state
   const [isTxModalOpen, setIsTxModalOpen] = useState(false);
@@ -1541,6 +1542,15 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
       return autoClassify(cleaned) || tx.category || 'Outros|#9CA3AF';
     };
 
+    // Aplica uma categoria em vários itens de uma vez (usado no editor de grupo do vendor)
+    const bulkSetCategory = async (items: Transaction[], newCat: string) => {
+      const ids = items.map(i => i.id);
+      const { error } = await supabase.from('financial_transactions').update({ category: newCat }).in('id', ids);
+      if (error) { console.error(error); return; }
+      setTransactions(prev => prev.map(t => ids.includes(t.id) ? { ...t, category: newCat } : t));
+      setCategoryPickerFor(null);
+    };
+
     const isOpen = (k: string) => !!expandedMonths[k] || (Object.keys(expandedMonths).length === 0 && k === buckets[0]?.key);
     const toggle = (k: string) => setExpandedMonths((prev) => ({ ...prev, [k]: !isOpen(k) }));
 
@@ -1906,9 +1916,35 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                                                       </div>
                                                     </div>
                                                   </div>
-                                                  <div className="text-right shrink-0 ml-3 flex items-center gap-2">
+                                                  <div className="text-right shrink-0 ml-3 flex items-center gap-2 relative">
                                                     <div className="text-sm font-mono font-bold text-danger min-w-[140px] text-right">- R$ {Math.abs(g.total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
-                                                    <div className="w-[80px]"></div>
+                                                    <div className="flex items-center justify-end gap-1 w-[80px]">
+                                                      <button
+                                                        onClick={(e) => { e.stopPropagation(); setCategoryPickerFor(categoryPickerFor === vKey ? null : vKey); }}
+                                                        className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity"
+                                                        title="Editar categoria do grupo"
+                                                      >
+                                                        <Edit2 className="w-3.5 h-3.5" />
+                                                      </button>
+                                                    </div>
+                                                    {categoryPickerFor === vKey && (
+                                                      <>
+                                                        <div className="fixed inset-0 z-30" onClick={(e) => { e.stopPropagation(); setCategoryPickerFor(null); }}></div>
+                                                        <div className="absolute right-0 top-full mt-1 w-56 bg-surface-2 border border-border-subtle shadow-2xl z-40 py-1 max-h-72 overflow-y-auto rounded-sm">
+                                                          <div className="px-3 py-1.5 text-[9px] font-mono uppercase tracking-widest text-text-muted border-b border-border-subtle">Aplicar categoria em {g.items.length} itens</div>
+                                                          {customTags.map((tag) => (
+                                                            <button
+                                                              key={tag.name}
+                                                              onClick={(e) => { e.stopPropagation(); bulkSetCategory(g.items, `${tag.name}|${tag.color}`); }}
+                                                              className="w-full text-left px-3 py-1.5 text-xs font-mono hover:bg-surface-3 flex items-center gap-2 text-text-main"
+                                                            >
+                                                              <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: tag.color }}></span>
+                                                              {tag.name}
+                                                            </button>
+                                                          ))}
+                                                        </div>
+                                                      </>
+                                                    )}
                                                   </div>
                                                 </button>
                                                 {vOpen && (
