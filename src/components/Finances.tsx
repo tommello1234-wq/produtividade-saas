@@ -1680,6 +1680,51 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
 
                   {open && (
                     <div className="space-y-4 animate-in fade-in slide-in-from-top-4 duration-300">
+                      {/* Pie chart do mês */}
+                      {(() => {
+                        const monthMap = new Map<string, number>();
+                        m.expenses.forEach((t) => {
+                          const c = resolveCategory(t);
+                          monthMap.set(c, (monthMap.get(c) || 0) + Math.abs(Number(t.amount)));
+                        });
+                        const monthData = Array.from(monthMap.entries())
+                          .map(([cat, value]) => ({ name: catName(cat), value: Math.round(value * 100) / 100, color: catColor(cat) }))
+                          .filter(d => d.value > 0)
+                          .sort((a, b) => b.value - a.value);
+                        if (monthData.length === 0) return null;
+                        return (
+                          <div className="bg-surface border border-border-subtle p-6">
+                            <div className="flex items-center justify-between mb-4">
+                              <h4 className="text-xs font-bold uppercase tracking-[0.1em] text-text-muted">Saídas por Categoria — {m.label}</h4>
+                              <span className="text-[10px] font-mono text-text-muted">{monthData.length} categorias</span>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
+                              <div style={{ width: '100%', height: 220 }}>
+                                <ResponsiveContainer>
+                                  <PieChart>
+                                    <Pie data={monthData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={45} outerRadius={85} paddingAngle={2}>
+                                      {monthData.map((d, i) => <Cell key={i} fill={d.color} />)}
+                                    </Pie>
+                                    <Tooltip formatter={(v: any) => `R$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`} contentStyle={{ background: '#141413', border: '1px solid #262626', fontSize: 12 }} />
+                                  </PieChart>
+                                </ResponsiveContainer>
+                              </div>
+                              <div className="space-y-1.5">
+                                {monthData.map((d) => (
+                                  <div key={d.name} className="flex items-center justify-between text-xs font-mono py-1 border-b border-border-subtle/40">
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: d.color }}></span>
+                                      <span className="text-text-main truncate">{d.name}</span>
+                                    </div>
+                                    <span className="text-danger font-bold shrink-0 ml-3">R$ {d.value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
                       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                         {/* ENTRADAS */}
                         <div className="bg-surface border border-border-subtle overflow-hidden">
