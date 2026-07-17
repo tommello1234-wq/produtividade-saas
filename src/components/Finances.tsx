@@ -1813,7 +1813,18 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                                                     </div>
                                                     <div className="min-w-0 text-left">
                                                       <div className="text-sm font-bold text-white truncate">{g.name}</div>
-                                                      <div className="text-[10px] font-mono text-text-muted">{g.items.length} itens</div>
+                                                      <div className="text-[10px] font-mono text-text-muted flex items-center gap-2">
+                                                        <span>{g.items.length} itens</span>
+                                                        {(() => {
+                                                          const gCat = resolveCategory(g.items[0]);
+                                                          return (
+                                                            <span className="flex items-center gap-1">
+                                                              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: catColor(gCat) }}></span>
+                                                              {catName(gCat)}
+                                                            </span>
+                                                          );
+                                                        })()}
+                                                      </div>
                                                     </div>
                                                   </div>
                                                   <div className="text-right shrink-0 ml-3 flex items-center gap-2">
