@@ -312,16 +312,48 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
         const tagsTx = txRes.data.find(t => t.description === '__FINANCIAL_TAGS__');
         if (tagsTx) {
           try {
-            setCustomTags(JSON.parse(tagsTx.category));
+            const loaded = JSON.parse(tagsTx.category);
+            const names = Array.isArray(loaded) ? loaded.map((t: any) => t.name).sort().join(',') : '';
+            const OLD_DEFAULT = ['Empresa','Investimentos','Lazer','Outros','Sobrevivência'].sort().join(',');
+            if (names === OLD_DEFAULT) {
+              // upgrade automático das categorias padrão antigas
+              setCustomTags([
+                { name: 'Mercado', color: '#10B981' },
+                { name: 'Restaurante/Delivery', color: '#F97316' },
+                { name: 'Casa', color: '#14B8A6' },
+                { name: 'Transporte', color: '#3B82F6' },
+                { name: 'Saúde', color: '#EF4444' },
+                { name: 'Assinaturas', color: '#8B5CF6' },
+                { name: 'Compras', color: '#A855F7' },
+                { name: 'Pessoal', color: '#F472B6' },
+                { name: 'Lazer', color: '#22D3EE' },
+                { name: 'Educação', color: '#0EA5E9' },
+                { name: 'Serviços', color: '#64748B' },
+                { name: 'Taxas/Impostos', color: '#F59E0B' },
+                { name: 'Pets', color: '#84CC16' },
+                { name: 'Outros', color: '#9CA3AF' }
+              ]);
+            } else {
+              setCustomTags(loaded);
+            }
           } catch (e) {
             console.error('Failed to parse tags', e);
           }
         } else {
           setCustomTags([
-            { name: 'Empresa', color: '#E8A0BF' },
-            { name: 'Sobrevivência', color: '#A3D9B1' },
-            { name: 'Lazer', color: '#D9B873' },
-            { name: 'Investimentos', color: '#60A5FA' },
+            { name: 'Mercado', color: '#10B981' },
+            { name: 'Restaurante/Delivery', color: '#F97316' },
+            { name: 'Casa', color: '#14B8A6' },
+            { name: 'Transporte', color: '#3B82F6' },
+            { name: 'Saúde', color: '#EF4444' },
+            { name: 'Assinaturas', color: '#8B5CF6' },
+            { name: 'Compras', color: '#A855F7' },
+            { name: 'Pessoal', color: '#F472B6' },
+            { name: 'Lazer', color: '#22D3EE' },
+            { name: 'Educação', color: '#0EA5E9' },
+            { name: 'Serviços', color: '#64748B' },
+            { name: 'Taxas/Impostos', color: '#F59E0B' },
+            { name: 'Pets', color: '#84CC16' },
             { name: 'Outros', color: '#9CA3AF' }
           ]);
         }
@@ -1483,17 +1515,19 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
 
     // Auto-classificador (fallback pra rows legadas com "Outros")
     const CATEGORY_RULES: Array<{ re: RegExp; cat: string }> = [
-      { re: /\b(uber|99app|cabify|posto|combust|shell|ipiranga|petrobras|taxi)\b/i, cat: 'Transporte|#3B82F6' },
-      { re: /\b(ifood|ifd|rappi|zé\s*delivery|delivery)\b/i, cat: 'Delivery|#F97316' },
-      { re: /\b(distribuidora|mercado|supermerc|padaria|acougue|frigorifico|hortifruti|alca|caratininga|panela|cantina|tomati|bebelu|old cave|takai|arte pizza|tako|sushi|burger|mc donalds|mcdonalds|higashi|sobral restaurante|kdm|cafe|graca|aurora|imperial)\b/i, cat: 'Alimentação|#10B981' },
-      { re: /\b(farmacia|drogaria|pague menos|santa|lasa|remedio|bandagem|dentista|consulta|hospital|clinica)\b/i, cat: 'Saúde|#EF4444' },
-      { re: /\b(adobe|netflix|spotify|youtube|premium|vimeo|vmt|vmo|figma|github|vercel|apple|microsoft|manychat|supabase|openai|claude|anthropic|lovable|replicate|panda|cursor|hostinger|dm\*|dl\*)\b/i, cat: 'Assinatura/SaaS|#8B5CF6' },
-      { re: /\b(facebk|facebook|meta ads|google ads|tiktok)\b/i, cat: 'Marketing/Ads|#EC4899' },
-      { re: /\b(condominio|luz|agua|energia|internet|net|vivo|claro|tim|aluguel|financiamento|lavanderia|timbon|imposto|iptu)\b/i, cat: 'Casa|#14B8A6' },
+      { re: /\b(uber|99app|cabify|posto|combust|shell|ipiranga|petrobras|taxi|gasolina)\b/i, cat: 'Transporte|#3B82F6' },
+      { re: /\b(ifood|ifd|rappi|zé\s*delivery|delivery|hamburgueria|pizza|sushi|burger|mc\s*donalds|mcdonalds|bebelu|cantina|tomati|old\s*cave|takai|tako|higashi|sobral\s*restaurante|arte\s*pizza|panela|cafe|graca|aurora|imperial|lanchonete|restaurante)\b/i, cat: 'Restaurante/Delivery|#F97316' },
+      { re: /\b(distribuidora|mercado|supermerc|padaria|acougue|frigorifico|hortifruti|alca|caratininga|kdm|farmaciasanta|zaffari|assai|atacadao|hiperideal)\b/i, cat: 'Mercado|#10B981' },
+      { re: /\b(farmacia|drogaria|pague\s*menos|remedio|bandagem|dentista|consulta|hospital|clinica|plano\s*de\s*saude|raio\s*x)\b/i, cat: 'Saúde|#EF4444' },
+      { re: /\b(adobe|netflix|spotify|youtube|premium|vimeo|vmt|vmo|figma|github|vercel|apple|microsoft|manychat|supabase|openai|claude|anthropic|lovable|replicate|panda|cursor|hostinger|icloud|dm\*|dl\*)\b/i, cat: 'Assinaturas|#8B5CF6' },
+      { re: /\b(condominio|luz|agua|energia|internet|vivo|claro|\btim\b|aluguel|financiamento|lavanderia|timbon|\bgas\b|enel|sabesp|coelce|iptu|conta\s*de\s*casa)\b/i, cat: 'Casa|#14B8A6' },
       { re: /\b(iof|multa|juros|encargos|tarifa|anuidade)\b/i, cat: 'Taxas/Impostos|#F59E0B' },
-      { re: /\b(amazon|mercado livre|shopee|aliexpress|zara|magalu|americanas|carrefour|zeflex|promolivros|ebn|jim\.com)\b/i, cat: 'Compras|#A855F7' },
-      { re: /\b(cabelo|cabelei|salao|barbeiro|estetica|manicure|academia|gym|smart fit)\b/i, cat: 'Pessoal|#F472B6' },
-      { re: /\b(pg\s*\*|asaas|ticto|hotmart|kiwify|monetiz|pagseguro|pagbank|contadora|contabil)\b/i, cat: 'Serviços|#64748B' },
+      { re: /\b(amazon|mercado\s*livre|shopee|aliexpress|zara|magalu|americanas|carrefour|zeflex|promolivros|ebn|jim\.com|kabum|lojas\s*renner)\b/i, cat: 'Compras|#A855F7' },
+      { re: /\b(cabelo|cabelei|salao|barbeiro|estetica|manicure|zenith)\b/i, cat: 'Pessoal|#F472B6' },
+      { re: /\b(academia|gym|smart\s*fit|cinema|viagem|hotel|airbnb|show|ingresso|balada|passeio)\b/i, cat: 'Lazer|#22D3EE' },
+      { re: /\b(curso|udemy|coursera|hotmart|edx|escola|livro|kindle)\b/i, cat: 'Educação|#0EA5E9' },
+      { re: /\b(petshop|racao|petz|veterinari|vet\b|petlove|dogsclub)\b/i, cat: 'Pets|#84CC16' },
+      { re: /\b(pg\s*\*|asaas|ticto|hotmart|kiwify|monetiz|pagseguro|pagbank|contadora|contabil|advogado|oficina)\b/i, cat: 'Serviços|#64748B' },
     ];
     const autoClassify = (raw: string): string | null => {
       const s = raw.toLowerCase();

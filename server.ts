@@ -555,17 +555,19 @@ export function createApiApp(): Express {
 
       // Classificador vendor -> categoria|cor. Se não bater em nada, usa `category` default.
       const CATEGORY_RULES: Array<{ re: RegExp; cat: string }> = [
-        { re: /\b(uber|99app|cabify|posto|combust|shell|ipiranga|petrobras|taxi)\b/i, cat: 'Transporte|#3B82F6' },
-        { re: /\b(ifood|ifd|rappi|zé\s*delivery|delivery)\b/i, cat: 'Delivery|#F97316' },
-        { re: /\b(distribuidora|mercado|supermerc|padaria|acougue|frigorifico|hortifruti|alca|caratininga|panela|cantina|tomati|bebelu|old cave|takai|arte pizza|tako|sushi|burger|mc donalds|mcdonalds|higashi|sobral restaurante|kdm|cafe|graca|aurora)\b/i, cat: 'Alimentação|#10B981' },
-        { re: /\b(farmacia|drogaria|pague menos|farm\w*|santa|lasa|remedio)\b/i, cat: 'Saúde|#EF4444' },
-        { re: /\b(adobe|netflix|spotify|youtube|premium|vimeo|vmt|vmo|figma|github|vercel|apple|microsoft|manychat|supabase|openai|claude|anthropic|lovable|replicate|panda|cursor|hostinger|dm\*|dl\*)\b/i, cat: 'Assinatura/SaaS|#8B5CF6' },
-        { re: /\b(facebk|facebook|meta ads|google ads|tiktok)\b/i, cat: 'Marketing/Ads|#EC4899' },
-        { re: /\b(condominio|luz|agua|energia|internet|net|vivo|claro|tim|aluguel|financiamento|lavanderia|timbon)\b/i, cat: 'Casa|#14B8A6' },
-        { re: /\b(iof|imposto|multa|juros|encargos|tarifa|anuidade)\b/i, cat: 'Taxas/Impostos|#F59E0B' },
-        { re: /\b(amazon|mercado livre|shopee|aliexpress|zara|magalu|americanas|carrefour|kdm|lasa|zeflex|promolivros|ebn)\b/i, cat: 'Compras|#A855F7' },
-        { re: /\b(cabelo|cabelei|salao|barbeiro|estetica|manicure|academia|gym|smart fit)\b/i, cat: 'Pessoal|#F472B6' },
-        { re: /\b(pg\s*\*|asaas|ticto|hotmart|kiwify|monetiz|pagseguro|pagbank)\b/i, cat: 'Serviços|#64748B' },
+        { re: /\b(uber|99app|cabify|posto|combust|shell|ipiranga|petrobras|taxi|gasolina)\b/i, cat: 'Transporte|#3B82F6' },
+        { re: /\b(ifood|ifd|rappi|zé\s*delivery|delivery|hamburgueria|pizza|sushi|burger|mc\s*donalds|mcdonalds|bebelu|cantina|tomati|old\s*cave|takai|tako|higashi|sobral\s*restaurante|arte\s*pizza|panela|cafe|graca|aurora|imperial|lanchonete|restaurante)\b/i, cat: 'Restaurante/Delivery|#F97316' },
+        { re: /\b(distribuidora|mercado|supermerc|padaria|acougue|frigorifico|hortifruti|alca|caratininga|kdm|farmaciasanta|zaffari|assai|atacadao|hiperideal)\b/i, cat: 'Mercado|#10B981' },
+        { re: /\b(farmacia|drogaria|pague\s*menos|remedio|bandagem|dentista|consulta|hospital|clinica|plano\s*de\s*saude|raio\s*x)\b/i, cat: 'Saúde|#EF4444' },
+        { re: /\b(adobe|netflix|spotify|youtube|premium|vimeo|vmt|vmo|figma|github|vercel|apple|microsoft|manychat|supabase|openai|claude|anthropic|lovable|replicate|panda|cursor|hostinger|icloud|dm\*|dl\*)\b/i, cat: 'Assinaturas|#8B5CF6' },
+        { re: /\b(condominio|luz|agua|energia|internet|vivo|claro|\btim\b|aluguel|financiamento|lavanderia|timbon|\bgas\b|enel|sabesp|coelce|iptu|conta\s*de\s*casa)\b/i, cat: 'Casa|#14B8A6' },
+        { re: /\b(iof|multa|juros|encargos|tarifa|anuidade)\b/i, cat: 'Taxas/Impostos|#F59E0B' },
+        { re: /\b(amazon|mercado\s*livre|shopee|aliexpress|zara|magalu|americanas|carrefour|zeflex|promolivros|ebn|jim\.com|kabum|lojas\s*renner)\b/i, cat: 'Compras|#A855F7' },
+        { re: /\b(cabelo|cabelei|salao|barbeiro|estetica|manicure|zenith)\b/i, cat: 'Pessoal|#F472B6' },
+        { re: /\b(academia|gym|smart\s*fit|cinema|viagem|hotel|airbnb|show|ingresso|balada|passeio)\b/i, cat: 'Lazer|#22D3EE' },
+        { re: /\b(curso|udemy|coursera|hotmart|edx|escola|livro|kindle)\b/i, cat: 'Educação|#0EA5E9' },
+        { re: /\b(petshop|racao|petz|veterinari|vet\b|petlove|dogsclub)\b/i, cat: 'Pets|#84CC16' },
+        { re: /\b(pg\s*\*|asaas|ticto|hotmart|kiwify|monetiz|pagseguro|pagbank|contadora|contabil|advogado|oficina)\b/i, cat: 'Serviços|#64748B' },
       ];
       const classify = (vendor: string, raw: string): string => {
         const s = `${vendor} ${raw}`.toLowerCase();
