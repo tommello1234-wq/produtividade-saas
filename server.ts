@@ -553,6 +553,26 @@ export function createApiApp(): Express {
       const category = defaultCategory || 'Outros|#9CA3AF';
       const tag = typeof prefix === 'string' && prefix.trim() ? prefix.trim() : '[CNPJ]';
 
+      // Classificador vendor -> categoria|cor. Se não bater em nada, usa `category` default.
+      const CATEGORY_RULES: Array<{ re: RegExp; cat: string }> = [
+        { re: /\b(uber|99app|cabify|posto|combust|shell|ipiranga|petrobras|taxi)\b/i, cat: 'Transporte|#3B82F6' },
+        { re: /\b(ifood|ifd|rappi|zé\s*delivery|delivery)\b/i, cat: 'Delivery|#F97316' },
+        { re: /\b(distribuidora|mercado|supermerc|padaria|acougue|frigorifico|hortifruti|alca|caratininga|panela|cantina|tomati|bebelu|old cave|takai|arte pizza|tako|sushi|burger|mc donalds|mcdonalds|higashi|sobral restaurante|kdm|cafe|graca|aurora)\b/i, cat: 'Alimentação|#10B981' },
+        { re: /\b(farmacia|drogaria|pague menos|farm\w*|santa|lasa|remedio)\b/i, cat: 'Saúde|#EF4444' },
+        { re: /\b(adobe|netflix|spotify|youtube|premium|vimeo|vmt|vmo|figma|github|vercel|apple|microsoft|manychat|supabase|openai|claude|anthropic|lovable|replicate|panda|cursor|hostinger|dm\*|dl\*)\b/i, cat: 'Assinatura/SaaS|#8B5CF6' },
+        { re: /\b(facebk|facebook|meta ads|google ads|tiktok)\b/i, cat: 'Marketing/Ads|#EC4899' },
+        { re: /\b(condominio|luz|agua|energia|internet|net|vivo|claro|tim|aluguel|financiamento|lavanderia|timbon)\b/i, cat: 'Casa|#14B8A6' },
+        { re: /\b(iof|imposto|multa|juros|encargos|tarifa|anuidade)\b/i, cat: 'Taxas/Impostos|#F59E0B' },
+        { re: /\b(amazon|mercado livre|shopee|aliexpress|zara|magalu|americanas|carrefour|kdm|lasa|zeflex|promolivros|ebn)\b/i, cat: 'Compras|#A855F7' },
+        { re: /\b(cabelo|cabelei|salao|barbeiro|estetica|manicure|academia|gym|smart fit)\b/i, cat: 'Pessoal|#F472B6' },
+        { re: /\b(pg\s*\*|asaas|ticto|hotmart|kiwify|monetiz|pagseguro|pagbank)\b/i, cat: 'Serviços|#64748B' },
+      ];
+      const classify = (vendor: string, raw: string): string => {
+        const s = `${vendor} ${raw}`.toLowerCase();
+        for (const r of CATEGORY_RULES) if (r.re.test(s)) return r.cat;
+        return category;
+      };
+
       const pick = (row: any, ...keys: string[]) => {
         for (const k of keys) {
           if (row[k] !== undefined && row[k] !== null && String(row[k]).trim() !== '') return row[k];
@@ -727,7 +747,7 @@ export function createApiApp(): Express {
           newTxs.push({
             user_id: userId,
             description: `${tag} ${vendor}`,
-            category,
+            category: classify(vendor, e.rawDesc),
             amount: e.amount,
             type: 'expense',
             date: e.date,
@@ -743,7 +763,7 @@ export function createApiApp(): Express {
             newTxs.push({
               user_id: userId,
               description: `${tag} ${vendor} - ${num}`,
-              category,
+              category: classify(vendor, e.rawDesc),
               amount: e.amount,
               type: 'expense',
               date: e.date,
@@ -761,7 +781,7 @@ export function createApiApp(): Express {
         newTxs.push({
           user_id: userId,
           description: desc,
-          category,
+          category: classify(r.vendor, r.rawDesc),
           amount: -r.amount, // negativo: subtrai do total de despesas
           type: 'expense',
           date: r.date,

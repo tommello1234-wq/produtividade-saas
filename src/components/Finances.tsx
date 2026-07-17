@@ -1481,6 +1481,32 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
     };
     const catName = (cat: string) => cat?.includes('|') ? cat.split('|')[0] : (cat || 'Outros');
 
+    // Auto-classificador (fallback pra rows legadas com "Outros")
+    const CATEGORY_RULES: Array<{ re: RegExp; cat: string }> = [
+      { re: /\b(uber|99app|cabify|posto|combust|shell|ipiranga|petrobras|taxi)\b/i, cat: 'Transporte|#3B82F6' },
+      { re: /\b(ifood|ifd|rappi|zé\s*delivery|delivery)\b/i, cat: 'Delivery|#F97316' },
+      { re: /\b(distribuidora|mercado|supermerc|padaria|acougue|frigorifico|hortifruti|alca|caratininga|panela|cantina|tomati|bebelu|old cave|takai|arte pizza|tako|sushi|burger|mc donalds|mcdonalds|higashi|sobral restaurante|kdm|cafe|graca|aurora|imperial)\b/i, cat: 'Alimentação|#10B981' },
+      { re: /\b(farmacia|drogaria|pague menos|santa|lasa|remedio|bandagem|dentista|consulta|hospital|clinica)\b/i, cat: 'Saúde|#EF4444' },
+      { re: /\b(adobe|netflix|spotify|youtube|premium|vimeo|vmt|vmo|figma|github|vercel|apple|microsoft|manychat|supabase|openai|claude|anthropic|lovable|replicate|panda|cursor|hostinger|dm\*|dl\*)\b/i, cat: 'Assinatura/SaaS|#8B5CF6' },
+      { re: /\b(facebk|facebook|meta ads|google ads|tiktok)\b/i, cat: 'Marketing/Ads|#EC4899' },
+      { re: /\b(condominio|luz|agua|energia|internet|net|vivo|claro|tim|aluguel|financiamento|lavanderia|timbon|imposto|iptu)\b/i, cat: 'Casa|#14B8A6' },
+      { re: /\b(iof|multa|juros|encargos|tarifa|anuidade)\b/i, cat: 'Taxas/Impostos|#F59E0B' },
+      { re: /\b(amazon|mercado livre|shopee|aliexpress|zara|magalu|americanas|carrefour|zeflex|promolivros|ebn|jim\.com)\b/i, cat: 'Compras|#A855F7' },
+      { re: /\b(cabelo|cabelei|salao|barbeiro|estetica|manicure|academia|gym|smart fit)\b/i, cat: 'Pessoal|#F472B6' },
+      { re: /\b(pg\s*\*|asaas|ticto|hotmart|kiwify|monetiz|pagseguro|pagbank|contadora|contabil)\b/i, cat: 'Serviços|#64748B' },
+    ];
+    const autoClassify = (raw: string): string | null => {
+      const s = raw.toLowerCase();
+      for (const r of CATEGORY_RULES) if (r.re.test(s)) return r.cat;
+      return null;
+    };
+    const resolveCategory = (tx: Transaction): string => {
+      const isDefault = !tx.category || tx.category === 'Outros' || tx.category === 'Outros|#9CA3AF';
+      if (!isDefault) return tx.category;
+      const cleaned = (tx.description || '').replace(/^\[[^\]]+\]\s*/, '').replace(/\s+-\s+\d+$/, '');
+      return autoClassify(cleaned) || tx.category || 'Outros|#9CA3AF';
+    };
+
     const isOpen = (k: string) => !!expandedMonths[k] || (Object.keys(expandedMonths).length === 0 && k === buckets[0]?.key);
     const toggle = (k: string) => setExpandedMonths((prev) => ({ ...prev, [k]: !isOpen(k) }));
 
@@ -1538,8 +1564,53 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
           <div className="p-12 text-center text-sm font-mono text-text-muted uppercase border border-border-subtle bg-surface">
             Nenhuma movimentação registrada ainda.
           </div>
-        ) : (
-          <div className="space-y-8">
+        ) : (() => {
+          // Agregado geral por categoria (todas as despesas CPF, todos os meses)
+          const aggMap = new Map<string, number>();
+          cpfTxs.filter(t => t.type === 'expense').forEach((t) => {
+            const c = resolveCategory(t);
+            aggMap.set(c, (aggMap.get(c) || 0) + Math.abs(Number(t.amount)));
+          });
+          const aggData = Array.from(aggMap.entries())
+            .map(([cat, value]) => ({ name: catName(cat), value: Math.round(value * 100) / 100, color: catColor(cat) }))
+            .filter(d => d.value > 0)
+            .sort((a, b) => b.value - a.value);
+
+          return (
+            <div className="space-y-8">
+              {/* Pie chart agregado — despesas por categoria (todos os meses) */}
+              {aggData.length > 0 && (
+                <div className="bg-surface border border-border-subtle p-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-xs font-bold uppercase tracking-[0.1em] text-text-muted">Despesas por Categoria (Total)</h3>
+                    <span className="text-[10px] font-mono text-text-muted">{aggData.length} categorias</span>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
+                    <div style={{ width: '100%', height: 260 }}>
+                      <ResponsiveContainer>
+                        <PieChart>
+                          <Pie data={aggData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={55} outerRadius={100} paddingAngle={2}>
+                            {aggData.map((d, i) => <Cell key={i} fill={d.color} />)}
+                          </Pie>
+                          <Tooltip formatter={(v: any) => `R$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`} contentStyle={{ background: '#141413', border: '1px solid #262626', fontSize: 12 }} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </div>
+                    <div className="space-y-1.5">
+                      {aggData.map((d) => (
+                        <div key={d.name} className="flex items-center justify-between text-xs font-mono py-1 border-b border-border-subtle/40">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: d.color }}></span>
+                            <span className="text-text-main truncate">{d.name}</span>
+                          </div>
+                          <span className="text-danger font-bold shrink-0 ml-3">R$ {d.value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
             {buckets.map((m) => {
               const open = isOpen(m.key);
               const saldo = m.totalIncome - m.totalExpense;
@@ -1597,8 +1668,8 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                                       <div className="text-[10px] font-mono text-text-muted flex items-center gap-2">
                                         <span>{formatDateBR(tx.date)}</span>
                                         <span className="flex items-center gap-1">
-                                          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: catColor(tx.category) }}></span>
-                                          {catName(tx.category)}
+                                          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: catColor(resolveCategory(tx)) }}></span>
+                                          {catName(resolveCategory(tx))}
                                         </span>
                                       </div>
                                     </div>
@@ -1667,8 +1738,8 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                                     <div className="text-[10px] font-mono text-text-muted flex items-center gap-2">
                                       <span>{formatDateBR(tx.date)}</span>
                                       <span className="flex items-center gap-1">
-                                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: catColor(tx.category) }}></span>
-                                        {catName(tx.category)}
+                                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: catColor(resolveCategory(tx)) }}></span>
+                                        {catName(resolveCategory(tx))}
                                       </span>
                                     </div>
                                   </div>
@@ -1793,8 +1864,9 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                 </div>
               );
             })}
-          </div>
-        )}
+            </div>
+          );
+        })()}
       </div>
     );
   };
