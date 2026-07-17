@@ -1636,7 +1636,29 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                           <Pie data={aggData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={55} outerRadius={100} paddingAngle={2}>
                             {aggData.map((d, i) => <Cell key={i} fill={d.color} />)}
                           </Pie>
-                          <Tooltip formatter={(v: any) => `R$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`} contentStyle={{ background: '#141413', border: '1px solid #262626', fontSize: 12 }} />
+                          <Tooltip
+                                      content={({ active, payload }) => {
+                                        if (!active || !payload || !payload.length) return null;
+                                        const p: any = payload[0];
+                                        const total = p.payload && Array.isArray(p.payload) ? 0 : 0;
+                                        const list = (p.payload && p.chartData) || [];
+                                        // fallback: soma via payload.percent (recharts fornece percent 0..1)
+                                        const pct = p.percent != null ? p.percent * 100 : 0;
+                                        return (
+                                          <div style={{ background: '#141413', border: '1px solid #262626', padding: '8px 12px', fontSize: 12, color: '#fff' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                                              <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: p.payload.color }}></span>
+                                              <strong>{p.name}</strong>
+                                            </div>
+                                            <div style={{ color: '#e5e5e5' }}>
+                                              R$ {Number(p.value).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                              <span style={{ color: '#9ca3af', marginLeft: 6 }}>({pct.toFixed(1)}%)</span>
+                                            </div>
+                                          </div>
+                                        );
+                                      }}
+                                      wrapperStyle={{ outline: 'none' }}
+                                    />
                         </PieChart>
                       </ResponsiveContainer>
                     </div>
@@ -1715,7 +1737,29 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                                     <Pie data={monthData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={45} outerRadius={85} paddingAngle={2}>
                                       {monthData.map((d, i) => <Cell key={i} fill={d.color} />)}
                                     </Pie>
-                                    <Tooltip formatter={(v: any) => `R$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`} contentStyle={{ background: '#141413', border: '1px solid #262626', fontSize: 12 }} />
+                                    <Tooltip
+                                      content={({ active, payload }) => {
+                                        if (!active || !payload || !payload.length) return null;
+                                        const p: any = payload[0];
+                                        const total = p.payload && Array.isArray(p.payload) ? 0 : 0;
+                                        const list = (p.payload && p.chartData) || [];
+                                        // fallback: soma via payload.percent (recharts fornece percent 0..1)
+                                        const pct = p.percent != null ? p.percent * 100 : 0;
+                                        return (
+                                          <div style={{ background: '#141413', border: '1px solid #262626', padding: '8px 12px', fontSize: 12, color: '#fff' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                                              <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: p.payload.color }}></span>
+                                              <strong>{p.name}</strong>
+                                            </div>
+                                            <div style={{ color: '#e5e5e5' }}>
+                                              R$ {Number(p.value).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                              <span style={{ color: '#9ca3af', marginLeft: 6 }}>({pct.toFixed(1)}%)</span>
+                                            </div>
+                                          </div>
+                                        );
+                                      }}
+                                      wrapperStyle={{ outline: 'none' }}
+                                    />
                                   </PieChart>
                                 </ResponsiveContainer>
                               </div>
