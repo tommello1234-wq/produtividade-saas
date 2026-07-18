@@ -3,6 +3,7 @@ import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, Cart
 import { DollarSign, Calendar, TrendingUp, Activity, Filter, Plus, X, Trash2, Edit2, RefreshCw, ChevronDown } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import Finances from './Finances';
+import Financiamento from './Financiamento';
 
 interface Transaction {
   id: string;
@@ -21,7 +22,7 @@ export default function Vendas() {
   const [expandedExpenseMonths, setExpandedExpenseMonths] = useState<Record<string, boolean>>({});
   
   // New state for Empresa tabs
-  const [activeTab, setActiveTab] = useState<'receitas' | 'despesas' | 'cpf'>(() => {
+  const [activeTab, setActiveTab] = useState<'receitas' | 'despesas' | 'cpf' | 'financiamento'>(() => {
     try { return (localStorage.getItem('vendas:activeTab') as any) || 'receitas'; } catch { return 'receitas'; }
   });
   useEffect(() => { try { localStorage.setItem('vendas:activeTab', activeTab); } catch {} }, [activeTab]);
@@ -1120,6 +1121,16 @@ export default function Vendas() {
         >
           CONTAS (CPF)
         </button>
+        <button
+          onClick={() => setActiveTab('financiamento')}
+          className={`px-6 py-4 text-[11px] font-mono tracking-[0.1em] uppercase transition-colors border-b-2 whitespace-nowrap ${
+            activeTab === 'financiamento'
+              ? 'text-accent border-accent bg-accent/5'
+              : 'text-text-muted border-transparent hover:text-text-main hover:bg-surface'
+          }`}
+        >
+          FINANCIAMENTO
+        </button>
       </div>
 
       {activeTab === 'receitas' && (
@@ -2054,6 +2065,12 @@ export default function Vendas() {
       {activeTab === 'cpf' && (
         <div className="animate-in fade-in duration-300">
           <Finances embedded />
+        </div>
+      )}
+
+      {activeTab === 'financiamento' && (
+        <div className="animate-in fade-in duration-300">
+          <Financiamento />
         </div>
       )}
 
