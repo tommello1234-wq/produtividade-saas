@@ -29,6 +29,7 @@ export default function Financiamento() {
   const [payments, setPayments] = useState<LoanPayment[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedLoanId, setSelectedLoanId] = useState<string | null>(null);
+  const [expandedYears, setExpandedYears] = useState<Record<string, boolean>>({});
 
   const [isLoanModalOpen, setIsLoanModalOpen] = useState(false);
   const [editingLoanId, setEditingLoanId] = useState<string | null>(null);
@@ -279,31 +280,64 @@ export default function Financiamento() {
             </div>
             {loanPayments.length === 0 ? (
               <div className="p-8 text-center text-xs font-mono text-text-muted">Nenhum pagamento registrado ainda.</div>
-            ) : (
-              <div className="divide-y divide-border-subtle">
-                {loanPayments.map((p) => (
-                  <div key={p.id} className="p-4 flex items-center justify-between hover:bg-surface-2/30 transition-colors group">
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-full bg-success/10 flex items-center justify-center border border-success/20">
-                        <DollarSign className="w-4 h-4 text-success" />
+            ) : (() => {
+              const byYear = new Map<string, LoanPayment[]>();
+              loanPayments.forEach((p) => {
+                const year = p.payment_date.slice(0, 4);
+                if (!byYear.has(year)) byYear.set(year, []);
+                byYear.get(year)!.push(p);
+              });
+              const years = Array.from(byYear.keys()).sort((a, b) => b.localeCompare(a));
+              return (
+                <div className="divide-y divide-border-subtle">
+                  {years.map((year) => {
+                    const yearPayments = byYear.get(year)!;
+                    const yearTotal = yearPayments.reduce((s, p) => s + Number(p.amount), 0);
+                    const isOpen = !!expandedYears[year] || (Object.keys(expandedYears).length === 0 && year === years[0]);
+                    return (
+                      <div key={year}>
+                        <button
+                          onClick={() => setExpandedYears((prev) => ({ ...prev, [year]: !isOpen }))}
+                          className="w-full p-4 flex items-center justify-between hover:bg-surface-2/30 transition-colors"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className={`text-text-muted text-xs transition-transform ${isOpen ? 'rotate-90' : ''}`}>▶</span>
+                            <span className="text-sm font-bold text-white">{year}</span>
+                            <span className="text-[10px] font-mono text-text-muted">({yearPayments.length} pagamentos)</span>
+                          </div>
+                          <span className="text-sm font-mono font-bold text-success">R$ {yearTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                        </button>
+                        {isOpen && (
+                          <div className="divide-y divide-border-subtle/60 bg-surface-2/10">
+                            {yearPayments.map((p) => (
+                              <div key={p.id} className="pl-10 p-4 flex items-center justify-between hover:bg-surface-2/30 transition-colors group">
+                                <div className="flex items-center gap-3">
+                                  <div className="w-9 h-9 rounded-full bg-success/10 flex items-center justify-center border border-success/20">
+                                    <DollarSign className="w-4 h-4 text-success" />
+                                  </div>
+                                  <div>
+                                    <div className="text-sm font-bold text-white">
+                                      {p.installment_number ? `Parcela ${p.installment_number}` : 'Pagamento'}
+                                    </div>
+                                    <div className="text-[10px] font-mono text-text-muted">{p.payment_date.split('-').reverse().join('/')}</div>
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <div className="text-sm font-mono font-bold text-success">R$ {Number(p.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                                  <button onClick={() => handleDeletePayment(p.id)} className="p-1.5 text-text-muted hover:text-danger hover:bg-danger/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                      <div>
-                        <div className="text-sm font-bold text-white">
-                          {p.installment_number ? `Parcela ${p.installment_number}` : 'Pagamento'}
-                        </div>
-                        <div className="text-[10px] font-mono text-text-muted">{p.payment_date.split('-').reverse().join('/')}</div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="text-sm font-mono font-bold text-success">R$ {Number(p.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
-                      <button onClick={() => handleDeletePayment(p.id)} className="p-1.5 text-text-muted hover:text-danger hover:bg-danger/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity">
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+                    );
+                  })}
+                </div>
+              );
+            })()}
             {loanPayments.length > 0 && (
               <div className="p-3 border-t border-border-subtle bg-surface-2/30 flex justify-between items-center">
                 <span className="text-[10px] font-mono uppercase text-text-muted tracking-[0.1em]">Total Pago</span>
