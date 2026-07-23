@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { AreaChart, Area, BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { ArrowUpRight, ArrowDownRight, Plus, Wallet, TrendingUp, Target, Coins, Activity, Calendar, DollarSign, X, Trash2, ChevronDown, ChevronUp, ChevronRight, MoreHorizontal, Edit2, Check, Settings } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
@@ -1666,7 +1666,7 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                   </div>
                   <div style={{ width: '100%', height: 260 }}>
                     <ResponsiveContainer>
-                      <BarChart data={monthlyBarsData} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
+                      <LineChart data={monthlyBarsData} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#262626" vertical={false} />
                         <XAxis dataKey="label" stroke="#737373" fontSize={11} tickLine={false} axisLine={false} />
                         <YAxis stroke="#737373" fontSize={11} tickLine={false} axisLine={false} tickFormatter={(v) => `R$${v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v}`} />
@@ -1674,11 +1674,11 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                           formatter={(v: any) => `R$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`}
                           contentStyle={{ background: '#141413', border: '1px solid #262626', fontSize: 12, color: '#fff' }}
                           labelStyle={{ color: '#fff', fontWeight: 700, marginBottom: 4 }}
-                          cursor={{ fill: 'rgba(255,255,255,0.03)' }}
+                          cursor={{ stroke: 'rgba(255,255,255,0.15)' }}
                         />
-                        <Bar dataKey="entradas" name="Entradas" fill="#10B981" radius={[3, 3, 0, 0]} />
-                        <Bar dataKey="saidas" name="Saídas" fill="#EF4444" radius={[3, 3, 0, 0]} />
-                      </BarChart>
+                        <Line type="monotone" dataKey="entradas" name="Entradas" stroke="#10B981" strokeWidth={2} dot={{ r: 3, fill: '#10B981' }} activeDot={{ r: 5 }} />
+                        <Line type="monotone" dataKey="saidas" name="Saídas" stroke="#EF4444" strokeWidth={2} dot={{ r: 3, fill: '#EF4444' }} activeDot={{ r: 5 }} />
+                      </LineChart>
                     </ResponsiveContainer>
                   </div>
                 </div>
