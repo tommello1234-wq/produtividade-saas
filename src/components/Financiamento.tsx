@@ -14,6 +14,8 @@ interface LoanContract {
   current_balance: number | null;
   remaining_months: number | null;
   current_installment: number | null;
+  down_payment: number | null;
+  fees_total: number | null;
 }
 
 interface LoanPayment {
@@ -39,6 +41,7 @@ export default function Financiamento() {
     name: '', contract_number: '', financed_amount: '', term_months: '',
     nominal_rate: '', effective_rate: '', start_date: '',
     current_balance: '', remaining_months: '', current_installment: '',
+    down_payment: '', fees_total: '',
   });
 
   const [paymentForm, setPaymentForm] = useState({ payment_date: new Date().toISOString().split('T')[0], amount: '', installment_number: '' });
@@ -59,7 +62,7 @@ export default function Financiamento() {
     setLoading(false);
   };
 
-  const resetForm = () => setForm({ name: '', contract_number: '', financed_amount: '', term_months: '', nominal_rate: '', effective_rate: '', start_date: '', current_balance: '', remaining_months: '', current_installment: '' });
+  const resetForm = () => setForm({ name: '', contract_number: '', financed_amount: '', term_months: '', nominal_rate: '', effective_rate: '', start_date: '', current_balance: '', remaining_months: '', current_installment: '', down_payment: '', fees_total: '' });
 
   const openNewLoan = () => { resetForm(); setEditingLoanId(null); setIsLoanModalOpen(true); };
   const openEditLoan = (loan: LoanContract) => {
@@ -74,6 +77,8 @@ export default function Financiamento() {
       current_balance: loan.current_balance != null ? String(loan.current_balance) : '',
       remaining_months: loan.remaining_months != null ? String(loan.remaining_months) : '',
       current_installment: loan.current_installment != null ? String(loan.current_installment) : '',
+      down_payment: loan.down_payment != null ? String(loan.down_payment) : '',
+      fees_total: loan.fees_total != null ? String(loan.fees_total) : '',
     });
     setEditingLoanId(loan.id);
     setIsLoanModalOpen(true);
@@ -95,6 +100,8 @@ export default function Financiamento() {
       current_balance: form.current_balance ? Number(form.current_balance) : null,
       remaining_months: form.remaining_months ? Number(form.remaining_months) : null,
       current_installment: form.current_installment ? Number(form.current_installment) : null,
+      down_payment: form.down_payment ? Number(form.down_payment) : null,
+      fees_total: form.fees_total ? Number(form.fees_total) : null,
     };
     if (editingLoanId) {
       await supabase.from('loan_contracts').update(payload).eq('id', editingLoanId);
@@ -247,6 +254,36 @@ export default function Financiamento() {
                   <div className="text-[10px] font-mono text-text-muted mt-1">ao ano</div>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* Custo total de aquisição do imóvel (entrada + taxas + financiamento) */}
+          {(selectedLoan.down_payment != null || selectedLoan.fees_total != null) && (
+            <div className="bg-surface border border-border-subtle p-6">
+              <div className="text-xs font-bold uppercase tracking-[0.1em] text-text-muted mb-4">Custo Total de Aquisição do Imóvel</div>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+                <div className="bg-surface-2 border border-border-subtle p-4">
+                  <div className="text-[10px] font-mono text-text-muted uppercase mb-1">Entrada</div>
+                  <div className="text-lg font-black text-white">R$ {(selectedLoan.down_payment || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                </div>
+                <div className="bg-surface-2 border border-border-subtle p-4">
+                  <div className="text-[10px] font-mono text-text-muted uppercase mb-1">Taxas (ITBI, cartório...)</div>
+                  <div className="text-lg font-black text-white">R$ {(selectedLoan.fees_total || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                </div>
+                <div className="bg-surface-2 border border-border-subtle p-4">
+                  <div className="text-[10px] font-mono text-text-muted uppercase mb-1">Financiamento (projetado)</div>
+                  <div className="text-lg font-black text-white">{projectedTotal != null ? `R$ ${projectedTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : '—'}</div>
+                </div>
+                <div className="bg-accent/10 border border-accent/30 p-4">
+                  <div className="text-[10px] font-mono text-accent uppercase mb-1">Custo Total do Imóvel</div>
+                  <div className="text-lg font-black text-accent">
+                    {projectedTotal != null
+                      ? `R$ ${(projectedTotal + (selectedLoan.down_payment || 0) + (selectedLoan.fees_total || 0)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+                      : '—'}
+                  </div>
+                </div>
+              </div>
+              <div className="text-[10px] font-mono text-text-muted">Entrada + Taxas + Total projetado do financiamento (já pago + parcela atual × meses restantes)</div>
             </div>
           )}
 
@@ -404,6 +441,19 @@ export default function Financiamento() {
                 <div>
                   <label className="block text-[10px] font-mono text-text-muted uppercase tracking-widest mb-2">Valor da Parcela Atual (R$)</label>
                   <input type="number" step="0.01" value={form.current_installment} onChange={(e) => setForm({ ...form, current_installment: e.target.value })} className="w-full bg-surface border border-border-subtle px-4 py-3 text-sm text-text-main focus:outline-none focus:border-accent" />
+                </div>
+              </div>
+              <div className="border-t border-border-subtle pt-4">
+                <div className="text-[10px] font-mono text-text-muted uppercase tracking-widest mb-3">Custos de Aquisição (fora do financiamento)</div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[10px] font-mono text-text-muted uppercase tracking-widest mb-2">Entrada (R$)</label>
+                    <input type="number" step="0.01" value={form.down_payment} onChange={(e) => setForm({ ...form, down_payment: e.target.value })} className="w-full bg-surface border border-border-subtle px-4 py-3 text-sm text-text-main focus:outline-none focus:border-accent" />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-mono text-text-muted uppercase tracking-widest mb-2">Taxas Totais (R$)</label>
+                    <input type="number" step="0.01" value={form.fees_total} onChange={(e) => setForm({ ...form, fees_total: e.target.value })} placeholder="ITBI, cartório, registro..." className="w-full bg-surface border border-border-subtle px-4 py-3 text-sm text-text-main focus:outline-none focus:border-accent placeholder:text-text-muted/40" />
+                  </div>
                 </div>
               </div>
               <button type="submit" className="w-full bg-accent text-bg py-3 text-xs font-bold uppercase tracking-[0.1em] hover:bg-accent/90 transition-colors mt-2">
