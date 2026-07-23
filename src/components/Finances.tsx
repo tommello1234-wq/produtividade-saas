@@ -1643,8 +1643,47 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
             .filter(d => d.value > 0)
             .sort((a, b) => b.value - a.value);
 
+          // Barras mês a mês: entradas vs saídas, ordenado cronologicamente
+          const monthlyBarsData = [...buckets]
+            .sort((a, b) => a.sortKey - b.sortKey)
+            .map((b) => ({
+              label: b.label.replace(' De ', '/').replace(/^(\w{3})\w*\/(\d{4})$/, '$1/$2'),
+              entradas: Math.round(b.totalIncome * 100) / 100,
+              saidas: Math.round(b.totalExpense * 100) / 100,
+            }));
+
           return (
             <div className="space-y-8">
+              {/* Barras mensais — entradas vs saídas */}
+              {monthlyBarsData.length > 0 && (
+                <div className="bg-surface border border-border-subtle p-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-xs font-bold uppercase tracking-[0.1em] text-text-muted">Entradas x Saídas por Mês</h3>
+                    <div className="flex items-center gap-4 text-[10px] font-mono text-text-muted">
+                      <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-success"></span>Entradas</span>
+                      <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-danger"></span>Saídas</span>
+                    </div>
+                  </div>
+                  <div style={{ width: '100%', height: 260 }}>
+                    <ResponsiveContainer>
+                      <BarChart data={monthlyBarsData} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#262626" vertical={false} />
+                        <XAxis dataKey="label" stroke="#737373" fontSize={11} tickLine={false} axisLine={false} />
+                        <YAxis stroke="#737373" fontSize={11} tickLine={false} axisLine={false} tickFormatter={(v) => `R$${v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v}`} />
+                        <Tooltip
+                          formatter={(v: any) => `R$ ${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`}
+                          contentStyle={{ background: '#141413', border: '1px solid #262626', fontSize: 12, color: '#fff' }}
+                          labelStyle={{ color: '#fff', fontWeight: 700, marginBottom: 4 }}
+                          cursor={{ fill: 'rgba(255,255,255,0.03)' }}
+                        />
+                        <Bar dataKey="entradas" name="Entradas" fill="#10B981" radius={[3, 3, 0, 0]} />
+                        <Bar dataKey="saidas" name="Saídas" fill="#EF4444" radius={[3, 3, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              )}
+
               {/* Pie chart agregado — despesas por categoria (todos os meses) */}
               {aggData.length > 0 && (
                 <div className="bg-surface border border-border-subtle p-6">
