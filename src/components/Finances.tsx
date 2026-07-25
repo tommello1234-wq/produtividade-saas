@@ -84,6 +84,8 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
   const [customTags, setCustomTags] = useState<{name: string, color: string}[]>([]);
   const [isManageTagsModalOpen, setIsManageTagsModalOpen] = useState(false);
   const [editingTag, setEditingTag] = useState<{oldName: string, name: string, color: string} | null>(null);
+  const [tagToDelete, setTagToDelete] = useState<string | null>(null);
+  const [deleteTagTarget, setDeleteTagTarget] = useState<string>('Outros');
   const [confirmDialog, setConfirmDialog] = useState<{isOpen: boolean, title: string, message: string, onConfirm: () => void} | null>(null);
 
   // Form states - Asset
@@ -566,41 +568,53 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
     fetchData();
   };
 
-  const handleDeleteTag = async (tagName: string) => {
-    setConfirmDialog({
-      isOpen: true,
-      title: 'Excluir Tag',
-      message: `Tem certeza que deseja excluir a tag "${tagName}"? As transações com esta tag serão movidas para "Outros".`,
-      onConfirm: async () => {
-        // Remove TODAS as ocorrências desse nome (cobre duplicatas por espaço/case)
-        const target = tagName.trim().toLowerCase();
-        const updatedTags = customTags.filter(t => t.name.trim().toLowerCase() !== target);
-        setCustomTags(updatedTags);
-        await saveTagsToDB(updatedTags);
-
-        // Update all transactions that use the old tag to "Outros|#9CA3AF"
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
-
-        const txsToUpdate = transactions.filter(t => {
-          const cat = t.category.replace('|recurring', '');
-          const [name] = cat.split('|');
-          return name === tagName;
-        });
-
-        for (const tx of txsToUpdate) {
-          const isRecurring = tx.category.endsWith('|recurring');
-          const newCat = `Outros|#9CA3AF${isRecurring ? '|recurring' : ''}`;
-          await supabase
-            .from('financial_transactions')
-            .update({ category: newCat })
-            .eq('id', tx.id);
-        }
-
-        fetchData();
-        setConfirmDialog(null);
-      }
+  // Abre o modal de exclusão com seletor de tag destino (só pergunta se há transações usando a tag)
+  const handleDeleteTag = (tagName: string) => {
+    const target = tagName.trim().toLowerCase();
+    const hasUsage = transactions.some(t => {
+      const cat = t.category.replace('|recurring', '');
+      const [name] = cat.split('|');
+      return name.trim().toLowerCase() === target;
     });
+    if (!hasUsage) {
+      // Sem transações usando essa tag — remove direto sem perguntar destino
+      const updatedTags = customTags.filter(t => t.name.trim().toLowerCase() !== target);
+      setCustomTags(updatedTags);
+      saveTagsToDB(updatedTags);
+      return;
+    }
+    setDeleteTagTarget('Outros');
+    setTagToDelete(tagName);
+  };
+
+  const confirmDeleteTag = async () => {
+    if (!tagToDelete) return;
+    const tagName = tagToDelete;
+    const target = tagName.trim().toLowerCase();
+    const updatedTags = customTags.filter(t => t.name.trim().toLowerCase() !== target);
+    setCustomTags(updatedTags);
+    await saveTagsToDB(updatedTags);
+
+    const destTag = customTags.find(t => t.name === deleteTagTarget);
+    const destCategory = destTag ? `${destTag.name}|${destTag.color}` : 'Outros|#9CA3AF';
+
+    const txsToUpdate = transactions.filter(t => {
+      const cat = t.category.replace('|recurring', '');
+      const [name] = cat.split('|');
+      return name.trim().toLowerCase() === target;
+    });
+
+    for (const tx of txsToUpdate) {
+      const isRecurring = tx.category.endsWith('|recurring');
+      const newCat = `${destCategory}${isRecurring ? '|recurring' : ''}`;
+      await supabase
+        .from('financial_transactions')
+        .update({ category: newCat })
+        .eq('id', tx.id);
+    }
+
+    setTagToDelete(null);
+    fetchData();
   };
 
   const handleAddTx = async (e: React.FormEvent) => {
@@ -3269,6 +3283,43 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                   </div>
                 ))
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: excluir tag com transações — escolhe pra onde mover */}
+      {tagToDelete && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[60] flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-surface w-full max-w-sm border border-border-subtle shadow-2xl animate-in zoom-in-95 duration-200">
+            <div className="p-6">
+              <h3 className="text-lg font-black tracking-[-1px] text-white mb-2">Excluir Tag "{tagToDelete}"</h3>
+              <p className="text-sm font-mono text-text-muted mb-4">
+                Existem transações usando essa tag. Escolha pra qual tag elas devem ser movidas:
+              </p>
+              <select
+                value={deleteTagTarget}
+                onChange={(e) => setDeleteTagTarget(e.target.value)}
+                className="w-full bg-surface-2 border border-border-subtle px-3 py-2 text-sm font-mono text-text-main focus:outline-none focus:border-accent mb-6"
+              >
+                {customTags.filter(t => t.name.trim().toLowerCase() !== tagToDelete.trim().toLowerCase()).map((t) => (
+                  <option key={t.name} value={t.name}>{t.name}</option>
+                ))}
+              </select>
+              <div className="flex gap-3 justify-end">
+                <button
+                  onClick={() => setTagToDelete(null)}
+                  className="px-4 py-2 text-xs font-mono font-bold uppercase tracking-[0.1em] text-text-muted hover:text-white hover:bg-surface-3 transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={confirmDeleteTag}
+                  className="px-4 py-2 text-xs font-mono font-bold uppercase tracking-[0.1em] text-black bg-error hover:bg-error/80 transition-colors"
+                >
+                  Excluir e Mover
+                </button>
+              </div>
             </div>
           </div>
         </div>
