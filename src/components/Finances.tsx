@@ -253,7 +253,7 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
     });
   };
 
-  const handleFaturaImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFaturaImport = (bank: 'Nubank' | 'XP') => async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file || !userId) return;
@@ -275,7 +275,7 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
       const res = await fetch('/api/expenses/import-csv', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, rows, prefix: '[Fatura]', defaultCategory }),
+        body: JSON.stringify({ userId, rows, prefix: `[Fatura ${bank}]`, defaultCategory }),
       });
       const data = await res.json();
       if (data.error) {
@@ -1858,14 +1858,28 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                               <span className="text-[10px] font-mono text-text-muted">{m.expenses.length} {m.expenses.length === 1 ? 'item' : 'itens'}</span>
                               <label
                                 className={`bg-info text-bg px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-[0.05em] hover:bg-info/90 transition-colors flex items-center gap-1.5 cursor-pointer ${isImportingFatura ? 'opacity-50 cursor-not-allowed' : ''}`}
-                                title="Importar CSV de fatura/extrato (datas vêm do CSV)"
+                                title="Importar CSV da fatura Nubank"
                               >
                                 <Activity className={`w-3 h-3 ${isImportingFatura ? 'animate-spin' : ''}`} />
-                                {isImportingFatura ? 'Importando...' : 'Importar Fatura'}
+                                {isImportingFatura ? 'Importando...' : 'Fatura Nubank'}
                                 <input
                                   type="file"
                                   accept=".csv,text/csv"
-                                  onChange={handleFaturaImport}
+                                  onChange={handleFaturaImport('Nubank')}
+                                  disabled={isImportingFatura}
+                                  className="hidden"
+                                />
+                              </label>
+                              <label
+                                className={`bg-accent text-bg px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-[0.05em] hover:bg-accent/90 transition-colors flex items-center gap-1.5 cursor-pointer ${isImportingFatura ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                title="Importar CSV da fatura XP"
+                              >
+                                <Activity className={`w-3 h-3 ${isImportingFatura ? 'animate-spin' : ''}`} />
+                                {isImportingFatura ? 'Importando...' : 'Fatura XP'}
+                                <input
+                                  type="file"
+                                  accept=".csv,text/csv"
+                                  onChange={handleFaturaImport('XP')}
                                   disabled={isImportingFatura}
                                   className="hidden"
                                 />
@@ -1875,11 +1889,9 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                           {m.expenses.length === 0 ? (
                             <div className="p-6 text-center text-xs font-mono text-text-muted">Sem saídas neste mês.</div>
                           ) : (() => {
-                            const faturaTxs = m.expenses.filter(t => t.description.startsWith('[Fatura]'));
-                            const regularTxs = m.expenses.filter(t => !t.description.startsWith('[Fatura]'));
-                            const faturaTotal = faturaTxs.reduce((s, t) => s + Number(t.amount), 0);
-                            const faturaKey = `fatura_${m.key}`;
-                            const faturaOpen = !!expandedMonths[faturaKey];
+                            const faturaBanks: Array<'Nubank' | 'XP'> = ['Nubank', 'XP'];
+                            const faturaTxs = m.expenses.filter(t => /^\[Fatura( Nubank| XP)?\]/.test(t.description));
+                            const regularTxs = m.expenses.filter(t => !/^\[Fatura( Nubank| XP)?\]/.test(t.description));
                             const renderExpenseRow = (tx: Transaction, inner = false) => (
                               <div key={tx.id} className={`${inner ? 'pl-12' : ''} p-4 flex items-center justify-between hover:bg-surface-2/30 transition-colors group border-l-2 border-l-transparent hover:border-l-danger/40`}>
                                 <div className="flex items-center gap-3 min-w-0">
@@ -1887,7 +1899,7 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                                     <DollarSign className="w-4 h-4 text-danger" />
                                   </div>
                                   <div className="min-w-0">
-                                    <div className="text-sm font-bold text-white truncate flex items-center gap-2" title={tx.description}>{inner ? tx.description.replace(/^\[Fatura\]\s*/, '') : tx.description}</div>
+                                    <div className="text-sm font-bold text-white truncate flex items-center gap-2" title={tx.description}>{inner ? tx.description.replace(/^\[Fatura( Nubank| XP)?\]\s*/, '') : tx.description}</div>
                                     <div className="text-[10px] font-mono text-text-muted flex items-center gap-2">
                                       <span>{formatDateBR(tx.date)}</span>
                                       <span className="flex items-center gap-1">
@@ -1910,133 +1922,150 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                                 </div>
                               </div>
                             );
+                            // Agrupa por banco (Nubank/XP/legado) a partir do prefixo [Fatura X]
+                            const bankMap = new Map();
+                            faturaTxs.forEach((t) => {
+                              const m = t.description.match(/^\[Fatura( Nubank| XP)?\]/);
+                              const bank = m && m[1] ? m[1].trim() : 'Outras';
+                              if (!bankMap.has(bank)) bankMap.set(bank, []);
+                              bankMap.get(bank).push(t);
+                            });
+                            const bankGroups = Array.from(bankMap.entries())
+                              .map(([bank, items]) => ({ bank, items, total: items.reduce((s, t) => s + Number(t.amount), 0) }))
+                              .sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
+
+                            const renderVendorGroups = (bankTxs, bankKeyPrefix) => {
+                              const vendorMap = new Map();
+                              bankTxs.forEach((t) => {
+                                const name = t.description
+                                  .replace(/^\[Fatura( Nubank| XP)?\]\s*/, '')
+                                  .replace(/\s+-\s+\d+$/, '')
+                                  .trim();
+                                if (!vendorMap.has(name)) vendorMap.set(name, []);
+                                vendorMap.get(name).push(t);
+                              });
+                              const groups = Array.from(vendorMap.entries())
+                                .map(([name, items]) => ({ name, items, total: items.reduce((s, t) => s + Number(t.amount), 0) }))
+                                .sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
+                              return (
+                                <div className="bg-surface-2/10 divide-y divide-border-subtle/50">
+                                  {groups.map((g) => {
+                                    if (g.items.length === 1) return renderExpenseRow(g.items[0], true);
+                                    const vKey = `${bankKeyPrefix}_${g.name}`;
+                                    const vOpen = !!expandedMonths[vKey];
+                                    return (
+                                      <div key={g.name}>
+                                        <button
+                                          onClick={() => setExpandedMonths(prev => ({ ...prev, [vKey]: !vOpen }))}
+                                          className="w-full pl-12 p-4 flex items-center justify-between hover:bg-surface-2/30 transition-colors group bg-surface-2/10 border-l-2 border-l-accent/30"
+                                        >
+                                          <div className="flex items-center gap-3 min-w-0">
+                                            <ChevronDown className={`w-3.5 h-3.5 text-text-muted transition-transform shrink-0 ${vOpen ? 'rotate-180 text-accent' : '-rotate-90'}`} />
+                                            <div className="w-9 h-9 rounded-full bg-danger/10 flex items-center justify-center border border-danger/20 shrink-0">
+                                              <DollarSign className="w-4 h-4 text-danger" />
+                                            </div>
+                                            <div className="min-w-0 text-left">
+                                              <div className="text-sm font-bold text-white truncate">{g.name}</div>
+                                              <div className="text-[10px] font-mono text-text-muted flex items-center gap-2">
+                                                <span>{g.items.length} itens</span>
+                                                {(() => {
+                                                  const gCat = resolveCategory(g.items[0]);
+                                                  return (
+                                                    <span className="flex items-center gap-1">
+                                                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: catColor(gCat) }}></span>
+                                                      {catName(gCat)}
+                                                    </span>
+                                                  );
+                                                })()}
+                                              </div>
+                                            </div>
+                                          </div>
+                                          <div className="text-right shrink-0 ml-3 flex items-center gap-2 relative">
+                                            <div className="text-sm font-mono font-bold text-danger min-w-[140px] text-right">- R$ {Math.abs(g.total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                                            <div className="flex items-center justify-end gap-1 w-[80px]">
+                                              <button
+                                                onClick={(e) => { e.stopPropagation(); setCategoryPickerFor(categoryPickerFor === vKey ? null : vKey); }}
+                                                className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity"
+                                                title="Editar categoria do grupo"
+                                              >
+                                                <Edit2 className="w-3.5 h-3.5" />
+                                              </button>
+                                            </div>
+                                            {categoryPickerFor === vKey && (
+                                              <>
+                                                <div className="fixed inset-0 z-30" onClick={(e) => { e.stopPropagation(); setCategoryPickerFor(null); }}></div>
+                                                <div className="absolute right-0 top-full mt-1 w-56 bg-surface-2 border border-border-subtle shadow-2xl z-40 py-1 max-h-72 overflow-y-auto rounded-sm">
+                                                  <div className="px-3 py-1.5 text-[9px] font-mono uppercase tracking-widest text-text-muted border-b border-border-subtle">Aplicar categoria em {g.items.length} itens</div>
+                                                  {customTags.map((tag) => (
+                                                    <button
+                                                      key={tag.name}
+                                                      onClick={(e) => { e.stopPropagation(); bulkSetCategory(g.items, `${tag.name}|${tag.color}`); }}
+                                                      className="w-full text-left px-3 py-1.5 text-xs font-mono hover:bg-surface-3 flex items-center gap-2 text-text-main"
+                                                    >
+                                                      <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: tag.color }}></span>
+                                                      {tag.name}
+                                                    </button>
+                                                  ))}
+                                                </div>
+                                              </>
+                                            )}
+                                          </div>
+                                        </button>
+                                        {vOpen && (
+                                          <div className="bg-surface-2/5 divide-y divide-border-subtle/30">
+                                            {g.items.map((t) => (
+                                              <div key={t.id} className="pl-20 p-3 flex items-center justify-between hover:bg-surface-2/30 transition-colors group">
+                                                <div className="min-w-0">
+                                                  <div className="text-[11px] font-mono text-text-muted">{formatDateBR(t.date)}</div>
+                                                </div>
+                                                <div className="text-right shrink-0 ml-3 flex items-center gap-2">
+                                                  <div className="text-xs font-mono font-bold text-danger min-w-[140px] text-right">- R$ {Math.abs(Number(t.amount)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                                                  <div className="flex items-center justify-end gap-1 w-[80px]">
+                                                    <button onClick={(e) => { e.stopPropagation(); handleEditTx(t); }} className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity"><Edit2 className="w-3.5 h-3.5" /></button>
+                                                    <button onClick={(e) => { e.stopPropagation(); handleDeleteTx(t.id); }} className="p-1.5 text-text-muted hover:text-danger hover:bg-danger/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 className="w-3.5 h-3.5" /></button>
+                                                  </div>
+                                                </div>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              );
+                            };
+
                             return (
                               <div className="divide-y divide-border-subtle">
-                                {faturaTxs.length > 0 && (
-                                  <>
-                                    <button
-                                      onClick={() => setExpandedMonths(prev => ({ ...prev, [faturaKey]: !faturaOpen }))}
-                                      className="w-full p-4 flex items-center justify-between hover:bg-surface-2/30 transition-colors group bg-surface-2/20 border-l-2 border-l-accent/40"
-                                    >
-                                      <div className="flex items-center gap-3 min-w-0">
-                                        <ChevronDown className={`w-4 h-4 text-text-muted transition-transform shrink-0 ${faturaOpen ? 'rotate-180 text-accent' : '-rotate-90'}`} />
-                                        <div className="w-9 h-9 rounded-full bg-danger/10 flex items-center justify-center border border-danger/20 shrink-0">
-                                          <DollarSign className="w-4 h-4 text-danger" />
+                                {bankGroups.map(({ bank, items, total }) => {
+                                  const bankKey = `fatura_${m.key}_${bank}`;
+                                  const bankOpen = !!expandedMonths[bankKey];
+                                  return (
+                                    <div key={bank}>
+                                      <button
+                                        onClick={() => setExpandedMonths(prev => ({ ...prev, [bankKey]: !bankOpen }))}
+                                        className="w-full p-4 flex items-center justify-between hover:bg-surface-2/30 transition-colors group bg-surface-2/20 border-l-2 border-l-accent/40"
+                                      >
+                                        <div className="flex items-center gap-3 min-w-0">
+                                          <ChevronDown className={`w-4 h-4 text-text-muted transition-transform shrink-0 ${bankOpen ? 'rotate-180 text-accent' : '-rotate-90'}`} />
+                                          <div className="w-9 h-9 rounded-full bg-danger/10 flex items-center justify-center border border-danger/20 shrink-0">
+                                            <DollarSign className="w-4 h-4 text-danger" />
+                                          </div>
+                                          <div className="min-w-0 text-left">
+                                            <div className="text-sm font-bold text-white truncate">Fatura {bank}</div>
+                                            <div className="text-[10px] font-mono text-text-muted">{items.length} {items.length === 1 ? 'item' : 'itens'}</div>
+                                          </div>
                                         </div>
-                                        <div className="min-w-0 text-left">
-                                          <div className="text-sm font-bold text-white truncate">Fatura</div>
-                                          <div className="text-[10px] font-mono text-text-muted">{faturaTxs.length} {faturaTxs.length === 1 ? 'item' : 'itens'}</div>
+                                        <div className="text-right shrink-0 ml-3 flex items-center gap-2">
+                                          <div className="text-sm font-mono font-bold text-danger min-w-[140px] text-right">- R$ {total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                                          <div className="w-[80px]"></div>
                                         </div>
-                                      </div>
-                                      <div className="text-right shrink-0 ml-3 flex items-center gap-2">
-                                        <div className="text-sm font-mono font-bold text-danger min-w-[140px] text-right">- R$ {faturaTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
-                                        <div className="w-[80px]"></div>
-                                      </div>
-                                    </button>
-                                    {faturaOpen && (() => {
-                                      // Agrupa Fatura por estabelecimento (remove sufixo numerado "- 17")
-                                      const vendorMap = new Map<string, Transaction[]>();
-                                      faturaTxs.forEach((t) => {
-                                        const name = t.description
-                                          .replace(/^\[Fatura\]\s*/, '')
-                                          .replace(/\s+-\s+\d+$/, '')
-                                          .trim();
-                                        if (!vendorMap.has(name)) vendorMap.set(name, []);
-                                        vendorMap.get(name)!.push(t);
-                                      });
-                                      const groups = Array.from(vendorMap.entries())
-                                        .map(([name, items]) => ({ name, items, total: items.reduce((s, t) => s + Number(t.amount), 0) }))
-                                        .sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
-                                      return (
-                                        <div className="bg-surface-2/10 divide-y divide-border-subtle/50">
-                                          {groups.map((g) => {
-                                            if (g.items.length === 1) return renderExpenseRow(g.items[0], true);
-                                            const vKey = `fatura_${m.key}_${g.name}`;
-                                            const vOpen = !!expandedMonths[vKey];
-                                            return (
-                                              <div key={g.name}>
-                                                <button
-                                                  onClick={() => setExpandedMonths(prev => ({ ...prev, [vKey]: !vOpen }))}
-                                                  className="w-full pl-12 p-4 flex items-center justify-between hover:bg-surface-2/30 transition-colors group bg-surface-2/10 border-l-2 border-l-accent/30"
-                                                >
-                                                  <div className="flex items-center gap-3 min-w-0">
-                                                    <ChevronDown className={`w-3.5 h-3.5 text-text-muted transition-transform shrink-0 ${vOpen ? 'rotate-180 text-accent' : '-rotate-90'}`} />
-                                                    <div className="w-9 h-9 rounded-full bg-danger/10 flex items-center justify-center border border-danger/20 shrink-0">
-                                                      <DollarSign className="w-4 h-4 text-danger" />
-                                                    </div>
-                                                    <div className="min-w-0 text-left">
-                                                      <div className="text-sm font-bold text-white truncate">{g.name}</div>
-                                                      <div className="text-[10px] font-mono text-text-muted flex items-center gap-2">
-                                                        <span>{g.items.length} itens</span>
-                                                        {(() => {
-                                                          const gCat = resolveCategory(g.items[0]);
-                                                          return (
-                                                            <span className="flex items-center gap-1">
-                                                              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: catColor(gCat) }}></span>
-                                                              {catName(gCat)}
-                                                            </span>
-                                                          );
-                                                        })()}
-                                                      </div>
-                                                    </div>
-                                                  </div>
-                                                  <div className="text-right shrink-0 ml-3 flex items-center gap-2 relative">
-                                                    <div className="text-sm font-mono font-bold text-danger min-w-[140px] text-right">- R$ {Math.abs(g.total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
-                                                    <div className="flex items-center justify-end gap-1 w-[80px]">
-                                                      <button
-                                                        onClick={(e) => { e.stopPropagation(); setCategoryPickerFor(categoryPickerFor === vKey ? null : vKey); }}
-                                                        className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity"
-                                                        title="Editar categoria do grupo"
-                                                      >
-                                                        <Edit2 className="w-3.5 h-3.5" />
-                                                      </button>
-                                                    </div>
-                                                    {categoryPickerFor === vKey && (
-                                                      <>
-                                                        <div className="fixed inset-0 z-30" onClick={(e) => { e.stopPropagation(); setCategoryPickerFor(null); }}></div>
-                                                        <div className="absolute right-0 top-full mt-1 w-56 bg-surface-2 border border-border-subtle shadow-2xl z-40 py-1 max-h-72 overflow-y-auto rounded-sm">
-                                                          <div className="px-3 py-1.5 text-[9px] font-mono uppercase tracking-widest text-text-muted border-b border-border-subtle">Aplicar categoria em {g.items.length} itens</div>
-                                                          {customTags.map((tag) => (
-                                                            <button
-                                                              key={tag.name}
-                                                              onClick={(e) => { e.stopPropagation(); bulkSetCategory(g.items, `${tag.name}|${tag.color}`); }}
-                                                              className="w-full text-left px-3 py-1.5 text-xs font-mono hover:bg-surface-3 flex items-center gap-2 text-text-main"
-                                                            >
-                                                              <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: tag.color }}></span>
-                                                              {tag.name}
-                                                            </button>
-                                                          ))}
-                                                        </div>
-                                                      </>
-                                                    )}
-                                                  </div>
-                                                </button>
-                                                {vOpen && (
-                                                  <div className="bg-surface-2/5 divide-y divide-border-subtle/30">
-                                                    {g.items.map((t) => (
-                                                      <div key={t.id} className="pl-20 p-3 flex items-center justify-between hover:bg-surface-2/30 transition-colors group">
-                                                        <div className="min-w-0">
-                                                          <div className="text-[11px] font-mono text-text-muted">{formatDateBR(t.date)}</div>
-                                                        </div>
-                                                        <div className="text-right shrink-0 ml-3 flex items-center gap-2">
-                                                          <div className="text-xs font-mono font-bold text-danger min-w-[140px] text-right">- R$ {Math.abs(Number(t.amount)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
-                                                          <div className="flex items-center justify-end gap-1 w-[80px]">
-                                                            <button onClick={(e) => { e.stopPropagation(); handleEditTx(t); }} className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity"><Edit2 className="w-3.5 h-3.5" /></button>
-                                                            <button onClick={(e) => { e.stopPropagation(); handleDeleteTx(t.id); }} className="p-1.5 text-text-muted hover:text-danger hover:bg-danger/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 className="w-3.5 h-3.5" /></button>
-                                                          </div>
-                                                        </div>
-                                                      </div>
-                                                    ))}
-                                                  </div>
-                                                )}
-                                              </div>
-                                            );
-                                          })}
-                                        </div>
-                                      );
-                                    })()}
-                                  </>
-                                )}
+                                      </button>
+                                      {bankOpen && renderVendorGroups(items, bankKey)}
+                                    </div>
+                                  );
+                                })}
                                 {regularTxs.map((tx) => renderExpenseRow(tx, false))}
                               </div>
                             );
@@ -2115,7 +2144,7 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
         const indentClass = indent === 1 ? 'pl-8' : indent === 2 ? 'pl-14' : '';
         let displayDesc = t.description;
         if (indent > 0) {
-          displayDesc = displayDesc.replace(/^\[Fatura\]\s*/, '');
+          displayDesc = displayDesc.replace(/^\[Fatura( Nubank| XP)?\]\s*/, '');
         }
         if (indent === 2 && parentVendor && displayDesc.startsWith(parentVendor)) {
           const rest = displayDesc.slice(parentVendor.length).trim();
@@ -2317,7 +2346,7 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                 <input
                   type="file"
                   accept=".csv,text/csv"
-                  onChange={handleFaturaImport}
+                  onChange={handleFaturaImport('Nubank')}
                   disabled={isImportingFatura}
                   className="hidden"
                 />
