@@ -507,8 +507,16 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
   };
 
   const handleCreateTag = async () => {
-    if (!newTagName.trim()) return;
-    const newTag = { name: newTagName.trim(), color: newTagColor };
+    const trimmedName = newTagName.trim();
+    if (!trimmedName) return;
+    // Evita duplicata: se já existe uma tag com esse nome (case-insensitive), reusa em vez de criar de novo
+    const existing = customTags.find(t => t.name.trim().toLowerCase() === trimmedName.toLowerCase());
+    if (existing) {
+      setTxCategory(`${existing.name}|${existing.color}`);
+      setIsCreatingTag(false);
+      return;
+    }
+    const newTag = { name: trimmedName, color: newTagColor };
     const updatedTags = [...customTags, newTag];
     setCustomTags(updatedTags);
     await saveTagsToDB(updatedTags);
@@ -517,11 +525,19 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
   };
 
   const handleUpdateTag = async (oldName: string, newName: string, newColor: string) => {
-    if (!newName.trim()) return;
-    
-    let updatedTags = customTags.map(t => t.name === oldName ? { name: newName.trim(), color: newColor } : t);
-    if (!customTags.some(t => t.name === oldName)) {
-      updatedTags.push({ name: newName.trim(), color: newColor });
+    const trimmedNewName = newName.trim();
+    if (!trimmedNewName) return;
+
+    // Se o novo nome já existe em OUTRA tag, mescla nela em vez de duplicar
+    const collision = customTags.find(t => t.name !== oldName && t.name.trim().toLowerCase() === trimmedNewName.toLowerCase());
+    let updatedTags: { name: string; color: string }[];
+    if (collision) {
+      updatedTags = customTags.filter(t => t.name !== oldName);
+    } else {
+      updatedTags = customTags.map(t => t.name === oldName ? { name: trimmedNewName, color: newColor } : t);
+      if (!customTags.some(t => t.name === oldName)) {
+        updatedTags.push({ name: trimmedNewName, color: newColor });
+      }
     }
     setCustomTags(updatedTags);
     await saveTagsToDB(updatedTags);
@@ -536,15 +552,16 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
       return name === oldName;
     });
 
+    const finalColor = collision ? collision.color : newColor;
     for (const tx of txsToUpdate) {
       const isRecurring = tx.category.endsWith('|recurring');
-      const newCat = `${newName.trim()}|${newColor}${isRecurring ? '|recurring' : ''}`;
+      const newCat = `${trimmedNewName}|${finalColor}${isRecurring ? '|recurring' : ''}`;
       await supabase
         .from('financial_transactions')
         .update({ category: newCat })
         .eq('id', tx.id);
     }
-    
+
     setEditingTag(null);
     fetchData();
   };
@@ -555,7 +572,9 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
       title: 'Excluir Tag',
       message: `Tem certeza que deseja excluir a tag "${tagName}"? As transações com esta tag serão movidas para "Outros".`,
       onConfirm: async () => {
-        const updatedTags = customTags.filter(t => t.name !== tagName);
+        // Remove TODAS as ocorrências desse nome (cobre duplicatas por espaço/case)
+        const target = tagName.trim().toLowerCase();
+        const updatedTags = customTags.filter(t => t.name.trim().toLowerCase() !== target);
         setCustomTags(updatedTags);
         await saveTagsToDB(updatedTags);
 
