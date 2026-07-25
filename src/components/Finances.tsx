@@ -53,6 +53,7 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
   const [loading, setLoading] = useState(true);
   const [expandedMonths, setExpandedMonths] = useState<Record<string, boolean>>({});
   const [categoryPickerFor, setCategoryPickerFor] = useState<string | null>(null);
+  const [categoryDetailModal, setCategoryDetailModal] = useState<{ name: string; color: string; txs: Transaction[] } | null>(null);
   
   // Modals state
   const [isTxModalOpen, setIsTxModalOpen] = useState(false);
@@ -1664,15 +1665,19 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
           // Agregado geral por categoria (todas as despesas CPF, todos os meses)
           // Agrupa pelo NOME exibido (não pela string crua), pra "Outros" e variações
           // de cor da mesma categoria não virarem fatias separadas.
-          const aggMap = new Map<string, { value: number; color: string }>();
+          const aggMap = new Map<string, { value: number; color: string; txs: Transaction[] }>();
           cpfTxs.filter(t => t.type === 'expense').forEach((t) => {
             const c = resolveCategory(t);
             const name = catName(c);
             const existing = aggMap.get(name);
-            aggMap.set(name, { value: (existing?.value || 0) + Math.abs(Number(t.amount)), color: existing?.color || catColor(c) });
+            aggMap.set(name, {
+              value: (existing?.value || 0) + Math.abs(Number(t.amount)),
+              color: existing?.color || catColor(c),
+              txs: [...(existing?.txs || []), t],
+            });
           });
           const aggData = Array.from(aggMap.entries())
-            .map(([name, { value, color }]) => ({ name, value: Math.round(value * 100) / 100, color }))
+            .map(([name, { value, color, txs }]) => ({ name, value: Math.round(value * 100) / 100, color, txs }))
             .filter(d => d.value > 0)
             .sort((a, b) => b.value - a.value);
 
@@ -1728,7 +1733,18 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                     <div style={{ width: '100%', height: 260 }}>
                       <ResponsiveContainer>
                         <PieChart>
-                          <Pie data={aggData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={55} outerRadius={100} paddingAngle={2}>
+                          <Pie
+                            data={aggData}
+                            dataKey="value"
+                            nameKey="name"
+                            cx="50%"
+                            cy="50%"
+                            innerRadius={55}
+                            outerRadius={100}
+                            paddingAngle={2}
+                            onClick={(d: any) => setCategoryDetailModal({ name: d.name, color: d.color, txs: d.txs })}
+                            style={{ cursor: 'pointer' }}
+                          >
                             {aggData.map((d, i) => <Cell key={i} fill={d.color} />)}
                           </Pie>
                           <Tooltip content={renderCatPieTooltip(aggData.reduce((s, d) => s + d.value, 0))} wrapperStyle={{ outline: 'none' }} />
@@ -1737,13 +1753,17 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                     </div>
                     <div className="space-y-1.5">
                       {aggData.map((d) => (
-                        <div key={d.name} className="flex items-center justify-between text-xs font-mono py-1 border-b border-border-subtle/40">
+                        <button
+                          key={d.name}
+                          onClick={() => setCategoryDetailModal({ name: d.name, color: d.color, txs: d.txs })}
+                          className="w-full flex items-center justify-between text-xs font-mono py-1 border-b border-border-subtle/40 hover:bg-surface-2/40 transition-colors text-left"
+                        >
                           <div className="flex items-center gap-2 min-w-0">
                             <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: d.color }}></span>
                             <span className="text-text-main truncate">{d.name}</span>
                           </div>
                           <span className="text-danger font-bold shrink-0 ml-3">R$ {d.value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
-                        </div>
+                        </button>
                       ))}
                     </div>
                   </div>
@@ -3283,6 +3303,45 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                   </div>
                 ))
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: detalhe da categoria — todas as transações que compõem a fatia */}
+      {categoryDetailModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[60] flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setCategoryDetailModal(null)}>
+          <div className="bg-surface w-full max-w-lg max-h-[80vh] overflow-hidden border border-border-subtle shadow-2xl flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="p-5 border-b border-border-subtle flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2">
+                <span className="w-3 h-3 rounded-full" style={{ backgroundColor: categoryDetailModal.color }}></span>
+                <h3 className="text-lg font-black tracking-[-0.5px] text-white">{categoryDetailModal.name}</h3>
+                <span className="text-[10px] font-mono text-text-muted">({categoryDetailModal.txs.length} {categoryDetailModal.txs.length === 1 ? 'transação' : 'transações'})</span>
+              </div>
+              <button onClick={() => setCategoryDetailModal(null)} className="text-text-muted hover:text-white transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="overflow-y-auto flex-1 divide-y divide-border-subtle">
+              {[...categoryDetailModal.txs]
+                .sort((a, b) => b.date.localeCompare(a.date))
+                .map((tx) => (
+                  <div key={tx.id} className="p-4 flex items-center justify-between hover:bg-surface-2/30 transition-colors">
+                    <div className="min-w-0">
+                      <div className="text-sm font-bold text-white truncate" title={tx.description}>{tx.description}</div>
+                      <div className="text-[10px] font-mono text-text-muted">{tx.date.split('-').reverse().join('/')}</div>
+                    </div>
+                    <div className="text-sm font-mono font-bold text-danger shrink-0 ml-3">
+                      R$ {Math.abs(Number(tx.amount)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    </div>
+                  </div>
+                ))}
+            </div>
+            <div className="p-4 border-t border-border-subtle bg-surface-2/30 flex justify-between items-center shrink-0">
+              <span className="text-[10px] font-mono uppercase text-text-muted tracking-[0.1em]">Total</span>
+              <span className="text-sm font-mono font-bold text-danger">
+                R$ {categoryDetailModal.txs.reduce((s, t) => s + Math.abs(Number(t.amount)), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+              </span>
             </div>
           </div>
         </div>
