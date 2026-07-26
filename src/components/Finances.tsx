@@ -1807,15 +1807,19 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                     <div className="space-y-4 animate-in fade-in slide-in-from-top-4 duration-300">
                       {/* Pie chart do mês */}
                       {(() => {
-                        const monthMap = new Map<string, { value: number; color: string }>();
+                        const monthMap = new Map<string, { value: number; color: string; txs: Transaction[] }>();
                         m.expenses.forEach((t) => {
                           const c = resolveCategory(t);
                           const name = catName(c);
                           const existing = monthMap.get(name);
-                          monthMap.set(name, { value: (existing?.value || 0) + Math.abs(Number(t.amount)), color: existing?.color || catColor(c) });
+                          monthMap.set(name, {
+                            value: (existing?.value || 0) + Math.abs(Number(t.amount)),
+                            color: existing?.color || catColor(c),
+                            txs: [...(existing?.txs || []), t],
+                          });
                         });
                         const monthData = Array.from(monthMap.entries())
-                          .map(([name, { value, color }]) => ({ name, value: Math.round(value * 100) / 100, color }))
+                          .map(([name, { value, color, txs }]) => ({ name, value: Math.round(value * 100) / 100, color, txs }))
                           .filter(d => d.value > 0)
                           .sort((a, b) => b.value - a.value);
                         if (monthData.length === 0) return null;
@@ -1829,7 +1833,18 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                               <div style={{ width: '100%', height: 220 }}>
                                 <ResponsiveContainer>
                                   <PieChart>
-                                    <Pie data={monthData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={45} outerRadius={85} paddingAngle={2}>
+                                    <Pie
+                                      data={monthData}
+                                      dataKey="value"
+                                      nameKey="name"
+                                      cx="50%"
+                                      cy="50%"
+                                      innerRadius={45}
+                                      outerRadius={85}
+                                      paddingAngle={2}
+                                      onClick={(d: any) => setCategoryDetailModal({ name: d.name, color: d.color, txs: d.txs })}
+                                      style={{ cursor: 'pointer' }}
+                                    >
                                       {monthData.map((d, i) => <Cell key={i} fill={d.color} />)}
                                     </Pie>
                                     <Tooltip content={renderCatPieTooltip(monthData.reduce((s, d) => s + d.value, 0))} wrapperStyle={{ outline: 'none' }} />
@@ -1838,13 +1853,17 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                               </div>
                               <div className="space-y-1.5">
                                 {monthData.map((d) => (
-                                  <div key={d.name} className="flex items-center justify-between text-xs font-mono py-1 border-b border-border-subtle/40">
+                                  <button
+                                    key={d.name}
+                                    onClick={() => setCategoryDetailModal({ name: d.name, color: d.color, txs: d.txs })}
+                                    className="w-full flex items-center justify-between text-xs font-mono py-1 border-b border-border-subtle/40 hover:bg-surface-2/40 transition-colors text-left"
+                                  >
                                     <div className="flex items-center gap-2 min-w-0">
                                       <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: d.color }}></span>
                                       <span className="text-text-main truncate">{d.name}</span>
                                     </div>
                                     <span className="text-danger font-bold shrink-0 ml-3">R$ {d.value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
-                                  </div>
+                                  </button>
                                 ))}
                               </div>
                             </div>
