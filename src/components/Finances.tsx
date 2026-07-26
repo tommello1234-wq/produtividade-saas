@@ -552,18 +552,36 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
     const txsToUpdate = transactions.filter(t => {
       const cat = t.category.replace('|recurring', '');
       const [name] = cat.split('|');
-      return name === oldName;
+      return name.trim().toLowerCase() === oldName.trim().toLowerCase();
     });
 
     const finalColor = collision ? collision.color : newColor;
-    for (const tx of txsToUpdate) {
-      const isRecurring = tx.category.endsWith('|recurring');
-      const newCat = `${trimmedNewName}|${finalColor}${isRecurring ? '|recurring' : ''}`;
-      await supabase
-        .from('financial_transactions')
-        .update({ category: newCat })
-        .eq('id', tx.id);
-    }
+    // Agrupa por categoria antiga exata e faz UM update por grupo (em vez de 1 por transação),
+    // pra não estourar o tempo quando a tag tem centenas de transações.
+    const byExactCat = new Map<string, string[]>();
+    txsToUpdate.forEach((tx) => {
+      const ids = byExactCat.get(tx.category) || [];
+      ids.push(tx.id);
+      byExactCat.set(tx.category, ids);
+    });
+
+    await Promise.all(
+      Array.from(byExactCat.entries()).map(([oldCat, ids]) => {
+        const isRecurring = oldCat.endsWith('|recurring');
+        const newCat = `${trimmedNewName}|${finalColor}${isRecurring ? '|recurring' : ''}`;
+        return supabase.from('financial_transactions').update({ category: newCat }).in('id', ids);
+      })
+    );
+
+    // Sincroniza o estado local na hora — sem isso a tag antiga reaparece
+    // porque `existingTags` também deriva das categorias das transações em memória.
+    setTransactions(prev => prev.map(t => {
+      const cat = t.category.replace('|recurring', '');
+      const [name] = cat.split('|');
+      if (name.trim().toLowerCase() !== oldName.trim().toLowerCase()) return t;
+      const isRecurring = t.category.endsWith('|recurring');
+      return { ...t, category: `${trimmedNewName}|${finalColor}${isRecurring ? '|recurring' : ''}` };
+    }));
 
     setEditingTag(null);
     fetchData();
@@ -605,14 +623,26 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
       return name.trim().toLowerCase() === target;
     });
 
-    for (const tx of txsToUpdate) {
-      const isRecurring = tx.category.endsWith('|recurring');
-      const newCat = `${destCategory}${isRecurring ? '|recurring' : ''}`;
-      await supabase
-        .from('financial_transactions')
-        .update({ category: newCat })
-        .eq('id', tx.id);
-    }
+    // Um update por grupo (recorrente vs não) em vez de 1 por transação
+    const recurringIds = txsToUpdate.filter(t => t.category.endsWith('|recurring')).map(t => t.id);
+    const normalIds = txsToUpdate.filter(t => !t.category.endsWith('|recurring')).map(t => t.id);
+    await Promise.all([
+      recurringIds.length
+        ? supabase.from('financial_transactions').update({ category: `${destCategory}|recurring` }).in('id', recurringIds)
+        : Promise.resolve(),
+      normalIds.length
+        ? supabase.from('financial_transactions').update({ category: destCategory }).in('id', normalIds)
+        : Promise.resolve(),
+    ]);
+
+    // Sincroniza estado local na hora (senão a tag apagada reaparece derivada das transações)
+    setTransactions(prev => prev.map(t => {
+      const cat = t.category.replace('|recurring', '');
+      const [name] = cat.split('|');
+      if (name.trim().toLowerCase() !== target) return t;
+      const isRecurring = t.category.endsWith('|recurring');
+      return { ...t, category: `${destCategory}${isRecurring ? '|recurring' : ''}` };
+    }));
 
     setTagToDelete(null);
     fetchData();
