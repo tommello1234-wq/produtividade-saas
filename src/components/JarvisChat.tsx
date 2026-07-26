@@ -362,7 +362,7 @@ Dê dicas proativas baseadas nos dados do usuário quando apropriado.`;
         result = { status: 'success', message: 'Tarefa removida com sucesso.' };
         window.dispatchEvent(new Event('app_data_changed'));
       } else if (name === 'get_transactions') {
-        const { data } = await supabase.from('financial_transactions').select('*').eq('user_id', user.id);
+        const { data } = await supabase.from('financial_transactions').select('*').eq('user_id', user.id).limit(50000);
         result = { status: 'success', transactions: data?.filter(t => t.description !== '__FINANCIAL_TAGS__') };
       } else if (name === 'create_transaction') {
         const { data, error } = await supabase.from('financial_transactions').insert([{ user_id: user.id, ...args as any }]).select();

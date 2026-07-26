@@ -306,11 +306,14 @@ export default function Vendas() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
+      // PostgREST corta em 1000 linhas por padrão e esta conta já passa de 2000 —
+      // sem limite explícito os totais e gráficos ficavam calculados só sobre uma fatia.
       const { data, error } = await supabase
         .from('financial_transactions')
         .select('*')
         .eq('user_id', user.id)
-        .order('date', { ascending: false });
+        .order('date', { ascending: false })
+        .limit(50000);
 
       if (error) throw error;
       

@@ -328,14 +328,22 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      const [txRes, assetsRes, treasuresRes] = await Promise.all([
-        supabase.from('financial_transactions').select('*').eq('user_id', user.id).order('date', { ascending: false }),
+      // ATENÇÃO: PostgREST limita a 1000 linhas por request por padrão. Esta conta já passa
+      // de 2000 transações, então `select('*')` truncava silenciosamente — e a linha do
+      // cadastro de tags (__FINANCIAL_TAGS__) ficava FORA da janela, fazendo o app achar que
+      // não havia cadastro e RECRIAR a lista default hardcoded a cada carga. Era isso que
+      // ressuscitava tags apagadas ("Pets", "Outros"): o delete gravava certo, o load
+      // sobrescrevia. Agora: limite explícito alto + query DEDICADA para o cadastro.
+      const [txRes, assetsRes, treasuresRes, tagsRes] = await Promise.all([
+        supabase.from('financial_transactions').select('*').eq('user_id', user.id).order('date', { ascending: false }).limit(50000),
         supabase.from('financial_assets').select('*').eq('user_id', user.id),
-        supabase.from('financial_treasures').select('*').eq('user_id', user.id)
+        supabase.from('financial_treasures').select('*').eq('user_id', user.id),
+        supabase.from('financial_transactions').select('id, category').eq('user_id', user.id).eq('description', '__FINANCIAL_TAGS__').limit(1).maybeSingle(),
       ]);
 
       if (txRes.data) {
-        const tagsTx = txRes.data.find(t => t.description === '__FINANCIAL_TAGS__');
+        // Usa o resultado da query dedicada; só cai no fallback do array grande se ela falhar.
+        const tagsTx = tagsRes?.data ?? txRes.data.find(t => t.description === '__FINANCIAL_TAGS__');
         if (tagsTx) {
           try {
             const loaded = JSON.parse(tagsTx.category);
@@ -365,7 +373,10 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
           } catch (e) {
             console.error('Failed to parse tags', e);
           }
-        } else {
+        } else if (!tagsRes?.error) {
+          // Só semeia os defaults quando a query DEDICADA confirmou que não existe cadastro
+          // (usuário novo). Se ela falhou, NÃO tocamos em customTags — sobrescrever aqui era
+          // o que ressuscitava tags apagadas.
           setCustomTags([
             { name: 'Mercado', color: '#10B981' },
             { name: 'Restaurante/Delivery', color: '#F97316' },
@@ -382,6 +393,8 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
             { name: 'Pets', color: '#84CC16' },
             { name: 'Outros', color: '#9CA3AF' }
           ]);
+        } else {
+          console.error('Falha ao carregar cadastro de tags — mantendo o estado atual:', tagsRes.error);
         }
 
         const realTransactions = txRes.data.filter(t =>
@@ -602,7 +615,8 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
       .select('id, category')
       .eq('user_id', user.id)
       .neq('description', '__FINANCIAL_TAGS__')
-      .like('category', `${fromName}|%`);
+      .like('category', `${fromName}|%`)
+      .limit(50000);
 
     if (selError) return { ok: false, count: 0, error: selError.message };
     if (!rows || rows.length === 0) return { ok: true, count: 0 };

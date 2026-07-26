@@ -110,7 +110,7 @@ export default function SegundoCerebro() {
         }
 
         const [transactions, assets, treasures, tasks, habits, academy] = await Promise.all([
-          supabase.from('financial_transactions').select('*').eq('user_id', user.id),
+          supabase.from('financial_transactions').select('*').eq('user_id', user.id).limit(50000),
           supabase.from('financial_assets').select('*').eq('user_id', user.id),
           supabase.from('financial_treasures').select('*').eq('user_id', user.id),
           supabase.from('work_tasks').select('*').eq('user_id', user.id),
