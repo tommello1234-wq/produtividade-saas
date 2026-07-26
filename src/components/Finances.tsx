@@ -1945,36 +1945,44 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                             const faturaBanks: Array<'Nubank' | 'XP'> = ['Nubank', 'XP'];
                             const faturaTxs = m.expenses.filter(t => /^\[Fatura( Nubank| XP)?\]/.test(t.description));
                             const regularTxs = m.expenses.filter(t => !/^\[Fatura( Nubank| XP)?\]/.test(t.description));
-                            const renderExpenseRow = (tx: Transaction, inner = false) => (
-                              <div key={tx.id} className={`${inner ? 'pl-12' : ''} p-4 flex items-center justify-between hover:bg-surface-2/30 transition-colors group border-l-2 border-l-transparent hover:border-l-danger/40`}>
-                                <div className="flex items-center gap-3 min-w-0">
-                                  <div className="w-9 h-9 rounded-full bg-danger/10 flex items-center justify-center border border-danger/20 shrink-0">
-                                    <DollarSign className="w-4 h-4 text-danger" />
+                            const renderExpenseRow = (tx: Transaction, inner = false) => {
+                              const isRefund = Number(tx.amount) < 0;
+                              return (
+                                <div key={tx.id} className={`${inner ? 'pl-12' : ''} p-4 flex items-center justify-between hover:bg-surface-2/30 transition-colors group border-l-2 border-l-transparent ${isRefund ? 'hover:border-l-success/40' : 'hover:border-l-danger/40'}`}>
+                                  <div className="flex items-center gap-3 min-w-0">
+                                    <div className={`w-9 h-9 rounded-full flex items-center justify-center border shrink-0 ${isRefund ? 'bg-success/10 border-success/20' : 'bg-danger/10 border-danger/20'}`}>
+                                      <DollarSign className={`w-4 h-4 ${isRefund ? 'text-success' : 'text-danger'}`} />
+                                    </div>
+                                    <div className="min-w-0">
+                                      <div className="text-sm font-bold text-white truncate flex items-center gap-2" title={tx.description}>
+                                        {inner ? tx.description.replace(/^\[Fatura( Nubank| XP)?\]\s*/, '') : tx.description}
+                                        {isRefund && <span className="text-[9px] bg-success/20 text-success px-1 rounded-sm font-bold shrink-0">ESTORNO</span>}
+                                      </div>
+                                      <div className="text-[10px] font-mono text-text-muted flex items-center gap-2">
+                                        <span>{formatDateBR(tx.date)}</span>
+                                        <span className="flex items-center gap-1">
+                                          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: catColor(resolveCategory(tx)) }}></span>
+                                          {catName(resolveCategory(tx))}
+                                        </span>
+                                      </div>
+                                    </div>
                                   </div>
-                                  <div className="min-w-0">
-                                    <div className="text-sm font-bold text-white truncate flex items-center gap-2" title={tx.description}>{inner ? tx.description.replace(/^\[Fatura( Nubank| XP)?\]\s*/, '') : tx.description}</div>
-                                    <div className="text-[10px] font-mono text-text-muted flex items-center gap-2">
-                                      <span>{formatDateBR(tx.date)}</span>
-                                      <span className="flex items-center gap-1">
-                                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: catColor(resolveCategory(tx)) }}></span>
-                                        {catName(resolveCategory(tx))}
-                                      </span>
+                                  <div className="text-right shrink-0 ml-3 flex items-center gap-2">
+                                    <div className={`text-sm font-mono font-bold min-w-[140px] text-right ${isRefund ? 'text-success' : 'text-danger'}`}>
+                                      {isRefund ? '+' : '-'} R$ {Math.abs(Number(tx.amount)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                    </div>
+                                    <div className="flex items-center justify-end gap-1 w-[80px]">
+                                      <button onClick={(e) => { e.stopPropagation(); handleEditTx(tx); }} className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity" title="Editar">
+                                        <Edit2 className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button onClick={(e) => { e.stopPropagation(); handleDeleteTx(tx.id); }} className="p-1.5 text-text-muted hover:text-danger hover:bg-danger/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity" title="Excluir">
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
                                     </div>
                                   </div>
                                 </div>
-                                <div className="text-right shrink-0 ml-3 flex items-center gap-2">
-                                  <div className="text-sm font-mono font-bold text-danger min-w-[140px] text-right">- R$ {Math.abs(Number(tx.amount)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
-                                  <div className="flex items-center justify-end gap-1 w-[80px]">
-                                    <button onClick={(e) => { e.stopPropagation(); handleEditTx(tx); }} className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity" title="Editar">
-                                      <Edit2 className="w-3.5 h-3.5" />
-                                    </button>
-                                    <button onClick={(e) => { e.stopPropagation(); handleDeleteTx(tx.id); }} className="p-1.5 text-text-muted hover:text-danger hover:bg-danger/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity" title="Excluir">
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
-                                  </div>
-                                </div>
-                              </div>
-                            );
+                              );
+                            };
                             // Agrupa por banco (Nubank/XP/legado) a partir do prefixo [Fatura X]
                             const bankMap = new Map();
                             faturaTxs.forEach((t) => {
@@ -2034,7 +2042,7 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                                             </div>
                                           </div>
                                           <div className="text-right shrink-0 ml-3 flex items-center gap-2 relative">
-                                            <div className="text-sm font-mono font-bold text-danger min-w-[140px] text-right">- R$ {Math.abs(g.total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                                            <div className={`text-sm font-mono font-bold min-w-[140px] text-right ${g.total < 0 ? 'text-success' : 'text-danger'}`}>{g.total < 0 ? '+' : '-'} R$ {Math.abs(g.total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
                                             <div className="flex items-center justify-end gap-1 w-[80px]">
                                               <button
                                                 onClick={(e) => { e.stopPropagation(); setCategoryPickerFor(categoryPickerFor === vKey ? null : vKey); }}
