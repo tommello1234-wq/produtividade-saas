@@ -1946,7 +1946,10 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                             const faturaTxs = m.expenses.filter(t => /^\[Fatura( Nubank| XP)?\]/.test(t.description));
                             const regularTxs = m.expenses.filter(t => !/^\[Fatura( Nubank| XP)?\]/.test(t.description));
                             const renderExpenseRow = (tx: Transaction, inner = false) => {
-                              const isRefund = Number(tx.amount) < 0;
+                              // Sinal negativo só significa "estorno" nas transações de Fatura importada.
+                              // Transações manuais SEMPRE guardam despesa como negativa (convenção diferente),
+                              // então usamos o texto "Estorno" na descrição pra não confundir as duas.
+                              const isRefund = /estorno/i.test(tx.description) && Number(tx.amount) < 0;
                               return (
                                 <div key={tx.id} className={`${inner ? 'pl-12' : ''} p-4 flex items-center justify-between hover:bg-surface-2/30 transition-colors group border-l-2 border-l-transparent ${isRefund ? 'hover:border-l-success/40' : 'hover:border-l-danger/40'}`}>
                                   <div className="flex items-center gap-3 min-w-0">
