@@ -126,31 +126,53 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
     });
   }, []);
 
-  const existingTags = React.useMemo(() => {
-    const tagsMap = new Map<string, string>();
-    
-    customTags.forEach(tag => {
-      tagsMap.set(tag.name, tag.color);
+  // FONTE ÚNICA DE VERDADE: a lista de tags é o cadastro (__FINANCIAL_TAGS__), ponto.
+  //
+  // Antes isso era `customTags ∪ (nomes derivados das categorias das transações)`, e essa
+  // derivação era a raiz do bug "apago a tag, recarrego, ela volta": qualquer linha do banco
+  // com `category='X|cor'` FABRICAVA a tag X na lista mesmo que X nunca tivesse sido cadastrada.
+  // As funções de delete/rename só sabem mexer no cadastro, então excluir uma dessas tags
+  // fantasma era um no-op que retornava sucesso — e o reload a re-derivava, para sempre.
+  //
+  // Nomes que existem em transações mas não no cadastro são "adotados" uma vez pelo efeito
+  // logo abaixo, o que mantém o seletor de categoria completo sem reintroduzir fantasmas.
+  const existingTags = customTags;
+
+  // Valor default valido para o <select> de categoria. NUNCA usar string hardcoded:
+  // se o value nao casa com nenhuma <option>, o React mostra a primeira option mas mantem
+  // o state com o valor sem correspondencia — e salvar grava uma categoria inexistente
+  // (nasce um fantasma). Aqui sempre devolvemos algo que esta no cadastro.
+  const defaultTxCategory = () => {
+    const prefer = customTags.find(t => /^(outros|n[aã]o sei)$/i.test(t.name.trim()));
+    const pick = prefer || customTags[0];
+    return pick ? `${pick.name}|${pick.color}` : 'Outros|#9CA3AF';
+  };
+
+  // Adoção de órfãos: registra no cadastro qualquer categoria em uso que não esteja cadastrada.
+  // Roda uma vez por carga de dados; sem isso, uma categoria legada sumiria do seletor.
+  const adoptedOrphansRef = useRef(false);
+  useEffect(() => {
+    if (adoptedOrphansRef.current) return;
+    if (customTags.length === 0 || transactions.length === 0) return;
+
+    const known = new Set(customTags.map(t => t.name.trim().toLowerCase()));
+    const orphans = new Map<string, string>();
+    transactions.forEach((t) => {
+      const cat = (t.category || '').replace('|recurring', '');
+      if (!cat) return;
+      const [name, color] = cat.includes('|') ? cat.split('|') : [cat, '#9CA3AF'];
+      const key = name.trim().toLowerCase();
+      if (!key || known.has(key) || orphans.has(key)) return;
+      orphans.set(key, JSON.stringify({ name: name.trim(), color: color || '#9CA3AF' }));
     });
 
-    transactions.forEach(t => {
-      let cat = t.category;
-      if (cat.endsWith('|recurring')) {
-        cat = cat.replace('|recurring', '');
-      }
-      if (cat.includes('|')) {
-        const [name, color] = cat.split('|');
-        if (!tagsMap.has(name)) {
-          tagsMap.set(name, color);
-        }
-      } else {
-        if (!tagsMap.has(cat)) {
-          tagsMap.set(cat, '#9CA3AF');
-        }
-      }
-    });
+    if (orphans.size === 0) { adoptedOrphansRef.current = true; return; }
 
-    return Array.from(tagsMap.entries()).map(([name, color]) => ({ name, color }));
+    adoptedOrphansRef.current = true;
+    const adopted = [...customTags, ...Array.from(orphans.values()).map(v => JSON.parse(v))];
+    setCustomTags(adopted);
+    saveTagsToDB(adopted);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transactions, customTags]);
 
   useEffect(() => {
@@ -542,67 +564,107 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
         updatedTags.push({ name: trimmedNewName, color: newColor });
       }
     }
+    const finalColor = collision ? collision.color : newColor;
+
+    // 1) Re-etiqueta as transações NO BANCO primeiro (alcança também as linhas
+    //    [CNPJ]/[Asaas]/[Stripe] que o state filtrado esconde). Se falhar, aborta
+    //    antes de tocar no cadastro — senão sobra "cadastro novo + transações velhas",
+    //    que é exatamente o que fabricava a tag fantasma no reload.
+    const result = await relabelCategoryInDB(oldName, `${trimmedNewName}|${finalColor}`);
+    if (!result.ok) {
+      setSyncMessage({ type: 'error', text: `Falha ao renomear: ${result.error}` });
+      setTimeout(() => setSyncMessage(null), 6000);
+      return;
+    }
+
+    // 2) Só então grava o cadastro
     setCustomTags(updatedTags);
     await saveTagsToDB(updatedTags);
 
-    // Update all transactions that use the old tag
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-
-    const txsToUpdate = transactions.filter(t => {
-      const cat = t.category.replace('|recurring', '');
-      const [name] = cat.split('|');
-      return name.trim().toLowerCase() === oldName.trim().toLowerCase();
-    });
-
-    const finalColor = collision ? collision.color : newColor;
-    // Agrupa por categoria antiga exata e faz UM update por grupo (em vez de 1 por transação),
-    // pra não estourar o tempo quando a tag tem centenas de transações.
-    const byExactCat = new Map<string, string[]>();
-    txsToUpdate.forEach((tx) => {
-      const ids = byExactCat.get(tx.category) || [];
-      ids.push(tx.id);
-      byExactCat.set(tx.category, ids);
-    });
-
-    await Promise.all(
-      Array.from(byExactCat.entries()).map(([oldCat, ids]) => {
-        const isRecurring = oldCat.endsWith('|recurring');
-        const newCat = `${trimmedNewName}|${finalColor}${isRecurring ? '|recurring' : ''}`;
-        return supabase.from('financial_transactions').update({ category: newCat }).in('id', ids);
-      })
-    );
-
-    // Sincroniza o estado local na hora — sem isso a tag antiga reaparece
-    // porque `existingTags` também deriva das categorias das transações em memória.
-    setTransactions(prev => prev.map(t => {
-      const cat = t.category.replace('|recurring', '');
-      const [name] = cat.split('|');
-      if (name.trim().toLowerCase() !== oldName.trim().toLowerCase()) return t;
-      const isRecurring = t.category.endsWith('|recurring');
-      return { ...t, category: `${trimmedNewName}|${finalColor}${isRecurring ? '|recurring' : ''}` };
-    }));
+    setSyncMessage({ type: 'success', text: `Tag renomeada para "${trimmedNewName}". ${result.count} transações atualizadas.` });
+    setTimeout(() => setSyncMessage(null), 5000);
 
     setEditingTag(null);
     fetchData();
   };
 
-  // Abre o modal de exclusão com seletor de tag destino (só pergunta se há transações usando a tag)
-  const handleDeleteTag = (tagName: string) => {
+  // Re-etiqueta no BANCO todas as linhas cuja categoria começa com `${fromName}|`.
+  // Precisa ir direto ao banco (e não pelo array `transactions`) porque o state é
+  // filtrado por prefixo de description ([CNPJ], [Asaas], [Stripe]...) e deixaria
+  // centenas de linhas órfãs carregando a tag apagada — que é justamente o que
+  // ressuscitava a tag no reload.
+  const relabelCategoryInDB = async (fromName: string, toCategory: string): Promise<{ ok: boolean; count: number; error?: string }> => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { ok: false, count: 0, error: 'Usuário não autenticado.' };
+
+    const { data: rows, error: selError } = await supabase
+      .from('financial_transactions')
+      .select('id, category')
+      .eq('user_id', user.id)
+      .neq('description', '__FINANCIAL_TAGS__')
+      .like('category', `${fromName}|%`);
+
+    if (selError) return { ok: false, count: 0, error: selError.message };
+    if (!rows || rows.length === 0) return { ok: true, count: 0 };
+
+    const recurringIds = rows.filter((r: any) => String(r.category).endsWith('|recurring')).map((r: any) => r.id);
+    const normalIds = rows.filter((r: any) => !String(r.category).endsWith('|recurring')).map((r: any) => r.id);
+
+    // .select() faz o PostgREST devolver as linhas afetadas — sem isso um update
+    // que atinge 0 linhas volta como sucesso silencioso.
+    const results = await Promise.all([
+      recurringIds.length
+        ? supabase.from('financial_transactions').update({ category: `${toCategory}|recurring` }).in('id', recurringIds).select('id')
+        : Promise.resolve({ data: [], error: null } as any),
+      normalIds.length
+        ? supabase.from('financial_transactions').update({ category: toCategory }).in('id', normalIds).select('id')
+        : Promise.resolve({ data: [], error: null } as any),
+    ]);
+
+    const failed = results.find((r: any) => r.error);
+    if (failed) return { ok: false, count: 0, error: failed.error.message };
+
+    const written = results.reduce((acc: number, r: any) => acc + (r.data?.length || 0), 0);
+    if (written < rows.length) {
+      return { ok: false, count: written, error: `Só ${written} de ${rows.length} linhas foram atualizadas.` };
+    }
+    return { ok: true, count: written };
+  };
+
+  // Categoria de fallback: primeira tag do cadastro que não seja a que está sendo removida.
+  const fallbackCategory = (excludeName?: string) => {
+    const candidate = customTags.find(t => !excludeName || t.name.trim().toLowerCase() !== excludeName.trim().toLowerCase());
+    return candidate ? `${candidate.name}|${candidate.color}` : 'Outros|#9CA3AF';
+  };
+
+  // Abre o modal de exclusão com seletor de tag destino.
+  // IMPORTANTE: a tag pode ser um "fantasma" (existe só nas transações, não no cadastro).
+  // Nesse caso remover do cadastro é no-op — o que resolve é re-etiquetar as transações.
+  const handleDeleteTag = async (tagName: string) => {
     const target = tagName.trim().toLowerCase();
-    const hasUsage = transactions.some(t => {
-      const cat = t.category.replace('|recurring', '');
-      const [name] = cat.split('|');
-      return name.trim().toLowerCase() === target;
-    });
-    if (!hasUsage) {
-      // Sem transações usando essa tag — remove direto sem perguntar destino
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    // Conta uso no BANCO (não no state filtrado) pra saber se precisa perguntar destino
+    const { count } = await supabase
+      .from('financial_transactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', user.id)
+      .neq('description', '__FINANCIAL_TAGS__')
+      .like('category', `${tagName}|%`);
+
+    if (!count) {
+      // Nenhuma transação usa: basta sair do cadastro
       const updatedTags = customTags.filter(t => t.name.trim().toLowerCase() !== target);
       setCustomTags(updatedTags);
-      saveTagsToDB(updatedTags);
+      await saveTagsToDB(updatedTags);
+      fetchData();
       return;
     }
-    setDeleteTagTarget('Outros');
+
+    // Default de destino: uma tag que realmente existe (evita cair em fallback fantasma)
+    const firstValid = customTags.find(t => t.name.trim().toLowerCase() !== target);
+    setDeleteTagTarget(firstValid ? firstValid.name : '');
     setTagToDelete(tagName);
   };
 
@@ -610,39 +672,26 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
     if (!tagToDelete) return;
     const tagName = tagToDelete;
     const target = tagName.trim().toLowerCase();
+
+    const destTag = customTags.find(t => t.name === deleteTagTarget);
+    const destCategory = destTag ? `${destTag.name}|${destTag.color}` : fallbackCategory(tagName);
+
+    // 1) Migra as transações PRIMEIRO. Se falhar, aborta sem mexer no cadastro —
+    //    o estado "cadastro sem a tag + transações com a tag" é o que criava o fantasma.
+    const result = await relabelCategoryInDB(tagName, destCategory);
+    if (!result.ok) {
+      setSyncMessage({ type: 'error', text: `Falha ao mover transações: ${result.error}` });
+      setTimeout(() => setSyncMessage(null), 6000);
+      return;
+    }
+
+    // 2) Só então remove do cadastro
     const updatedTags = customTags.filter(t => t.name.trim().toLowerCase() !== target);
     setCustomTags(updatedTags);
     await saveTagsToDB(updatedTags);
 
-    const destTag = customTags.find(t => t.name === deleteTagTarget);
-    const destCategory = destTag ? `${destTag.name}|${destTag.color}` : 'Outros|#9CA3AF';
-
-    const txsToUpdate = transactions.filter(t => {
-      const cat = t.category.replace('|recurring', '');
-      const [name] = cat.split('|');
-      return name.trim().toLowerCase() === target;
-    });
-
-    // Um update por grupo (recorrente vs não) em vez de 1 por transação
-    const recurringIds = txsToUpdate.filter(t => t.category.endsWith('|recurring')).map(t => t.id);
-    const normalIds = txsToUpdate.filter(t => !t.category.endsWith('|recurring')).map(t => t.id);
-    await Promise.all([
-      recurringIds.length
-        ? supabase.from('financial_transactions').update({ category: `${destCategory}|recurring` }).in('id', recurringIds)
-        : Promise.resolve(),
-      normalIds.length
-        ? supabase.from('financial_transactions').update({ category: destCategory }).in('id', normalIds)
-        : Promise.resolve(),
-    ]);
-
-    // Sincroniza estado local na hora (senão a tag apagada reaparece derivada das transações)
-    setTransactions(prev => prev.map(t => {
-      const cat = t.category.replace('|recurring', '');
-      const [name] = cat.split('|');
-      if (name.trim().toLowerCase() !== target) return t;
-      const isRecurring = t.category.endsWith('|recurring');
-      return { ...t, category: `${destCategory}${isRecurring ? '|recurring' : ''}` };
-    }));
+    setSyncMessage({ type: 'success', text: `Tag "${tagName}" excluída. ${result.count} transações movidas para ${destCategory.split('|')[0]}.` });
+    setTimeout(() => setSyncMessage(null), 5000);
 
     setTagToDelete(null);
     fetchData();
@@ -661,7 +710,12 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
 
       const amount = parseFloat(txAmount);
       
-      let finalCategory = txCategory;
+      // Guarda final: se a categoria selecionada não existe no cadastro (ex: o state ficou
+      // com um valor sem <option> correspondente), cai numa tag válida em vez de gravar
+      // uma categoria inexistente no banco.
+      const selectedName = (txCategory || '').replace('|recurring', '').split('|')[0].trim().toLowerCase();
+      const isRegistered = customTags.some(t => t.name.trim().toLowerCase() === selectedName);
+      let finalCategory = isRegistered ? txCategory : defaultTxCategory();
       if (txIsRecurring && !finalCategory.endsWith('|recurring')) {
         finalCategory += '|recurring';
       } else if (!txIsRecurring && finalCategory.endsWith('|recurring')) {
@@ -700,7 +754,7 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
       setEditingTxId(null);
       setTxAmount('');
       setTxDesc('');
-      setTxCategory('Outros|#9CA3AF');
+      setTxCategory(defaultTxCategory());
       setTxIsRecurring(false);
       setTxDate(new Date().toISOString().split('T')[0]);
       setIsCreatingTag(false);
@@ -1673,7 +1727,7 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                 setEditingTxId(null);
                 setTxAmount('');
                 setTxDesc('');
-                setTxCategory('Outros|#9CA3AF');
+                setTxCategory(defaultTxCategory());
                 setTxIsRecurring(false);
                 setTxDate(new Date().toISOString().split('T')[0]);
                 setIsTxModalOpen(true);
@@ -2513,7 +2567,7 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                 setEditingTxId(null);
                 setTxAmount('');
                 setTxDesc('');
-                setTxCategory('Outros|#9CA3AF');
+                setTxCategory(defaultTxCategory());
                 setTxIsRecurring(false);
                 setTxDate(new Date().toISOString().split('T')[0]);
                 setIsTxModalOpen(true);
