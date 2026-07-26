@@ -1972,7 +1972,7 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                                   </div>
                                   <div className="text-right shrink-0 ml-3 flex items-center gap-2">
                                     <div className={`text-sm font-mono font-bold min-w-[140px] text-right ${isRefund ? 'text-success' : 'text-danger'}`}>
-                                      {isRefund ? '+' : '-'} R$ {Math.abs(Number(tx.amount)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                      {isRefund ? '+ ' : ''}R$ {Math.abs(Number(tx.amount)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                                     </div>
                                     <div className="flex items-center justify-end gap-1 w-[80px]">
                                       <button onClick={(e) => { e.stopPropagation(); handleEditTx(tx); }} className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity" title="Editar">
@@ -2045,7 +2045,7 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                                             </div>
                                           </div>
                                           <div className="text-right shrink-0 ml-3 flex items-center gap-2 relative">
-                                            <div className={`text-sm font-mono font-bold min-w-[140px] text-right ${g.total < 0 ? 'text-success' : 'text-danger'}`}>{g.total < 0 ? '+' : '-'} R$ {Math.abs(g.total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                                            <div className={`text-sm font-mono font-bold min-w-[140px] text-right ${g.total < 0 ? 'text-success' : 'text-danger'}`}>{g.total < 0 ? '+ ' : ''}R$ {Math.abs(g.total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
                                             <div className="flex items-center justify-end gap-1 w-[80px]">
                                               <button
                                                 onClick={(e) => { e.stopPropagation(); setCategoryPickerFor(categoryPickerFor === vKey ? null : vKey); }}
@@ -2083,7 +2083,7 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                                                   <div className="text-[11px] font-mono text-text-muted">{formatDateBR(t.date)}</div>
                                                 </div>
                                                 <div className="text-right shrink-0 ml-3 flex items-center gap-2">
-                                                  <div className="text-xs font-mono font-bold text-danger min-w-[140px] text-right">- R$ {Math.abs(Number(t.amount)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                                                  <div className="text-xs font-mono font-bold text-danger min-w-[140px] text-right">R$ {Math.abs(Number(t.amount)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
                                                   <div className="flex items-center justify-end gap-1 w-[80px]">
                                                     <button onClick={(e) => { e.stopPropagation(); handleEditTx(t); }} className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity"><Edit2 className="w-3.5 h-3.5" /></button>
                                                     <button onClick={(e) => { e.stopPropagation(); handleDeleteTx(t.id); }} className="p-1.5 text-text-muted hover:text-danger hover:bg-danger/10 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 className="w-3.5 h-3.5" /></button>
@@ -2122,7 +2122,7 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                                           </div>
                                         </div>
                                         <div className="text-right shrink-0 ml-3 flex items-center gap-2">
-                                          <div className="text-sm font-mono font-bold text-danger min-w-[140px] text-right">- R$ {total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+                                          <div className="text-sm font-mono font-bold text-danger min-w-[140px] text-right">R$ {total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
                                           <div className="w-[80px]"></div>
                                         </div>
                                       </button>
@@ -2137,7 +2137,7 @@ export default function Finances({ embedded = false }: FinancesProps = {}) {
                           {m.expenses.length > 0 && (
                             <div className="p-3 border-t border-border-subtle bg-surface-2/30 flex justify-between items-center">
                               <span className="text-[10px] font-mono uppercase text-text-muted tracking-[0.1em]">Total Saídas</span>
-                              <span className="text-sm font-mono font-bold text-danger">- R$ {m.totalExpense.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                              <span className="text-sm font-mono font-bold text-danger">R$ {m.totalExpense.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
                             </div>
                           )}
                         </div>
